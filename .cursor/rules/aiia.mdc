@@ -1,0 +1,38 @@
+---
+description: Reglas permanentes para el desarrollo de AIIA
+globs:
+alwaysApply: true
+---
+
+# AIIA Development Rules
+
+## Producto
+- App desktop Windows con Tauri 2 + React + TypeScript
+- Máximo 5 agentes publicados simultáneamente
+- Todo local: datos, credenciales, IA (Ollama). Sin Google, sin APIs de pago
+- Internet solo para búsqueda/scraping durante ejecución de agentes
+
+## Stack obligatorio
+- `apps/desktop` — Tauri 2 + React UI
+- `crates/aiia-core` — Rust: DB, crypto DPAPI, scheduler
+- `packages/ollama-client` — Cliente Ollama + detección HW
+- `packages/agent-engine` — Planner, Executor, effort levels, AgentSpec
+- `packages/scraper` — DuckDuckGo + Playwright
+- `packages/agent-runner` — CLI Node para ejecución de agentes
+- `landing/` — Sitio estático para Render
+
+## Convenciones
+- AgentSpec es el contrato central (`docs/agent-spec-schema.md`)
+- Revisión humana obligatoria antes de publicar agente
+- i18n EN/ES con i18next
+- Documentar cambios en `docs/`
+- No añadir dependencias de pago ni servicios cloud para datos
+
+## BMAD
+- Usar artefactos en `docs/` (prd, architecture, epics) como fuente de verdad
+- Seguir `docs/project-context.md` para contexto del proyecto
+
+## Seguridad
+- Credenciales cifradas con DPAPI (Windows)
+- Nunca loguear secretos en plaintext
+- SQLCipher/rusqlite para datos locales
