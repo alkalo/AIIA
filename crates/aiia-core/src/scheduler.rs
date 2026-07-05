@@ -180,7 +180,7 @@ pub fn resolve_node_executable() -> PathBuf {
 fn augment_path_with_node(node_exe: &Path) -> Option<String> {
     let node_dir = node_exe.parent()?;
     let node_dir = node_dir.to_string_lossy();
-    let separator = std::env::consts::PATH_SEPARATOR;
+    let separator = if cfg!(windows) { ';' } else { ':' };
     match std::env::var("PATH") {
         Ok(path) if path.split(separator).any(|entry| entry == node_dir) => None,
         Ok(path) => Some(format!("{node_dir}{separator}{path}")),
