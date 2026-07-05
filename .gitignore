@@ -1,0 +1,11 @@
+node_modules/
+dist/
+target/
+*.db
+.env
+.DS_Store
+Thumbs.db
+apps/desktop/dist/
+packages/*/dist/
+_bmad-output/
+*.log

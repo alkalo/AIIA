@@ -1,0 +1,23 @@
+{
+  "name": "@aiia/agent-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "aiia-run": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@aiia/agent-engine": "*",
+    "@aiia/ollama-client": "*",
+    "@aiia/scraper": "*",
+    "uuid": "^11.0.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.3",
+    "@types/node": "^22.0.0"
+  }
+}

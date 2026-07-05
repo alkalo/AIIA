@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AIIA — Local AI Search Agents</title>
+  <meta name="description" content="Create local AI agents that search the web and collect data for you. Free Windows app. 100% local with Ollama." />
+  <meta property="og:title" content="AIIA — Local AI Search Agents" />
+  <meta property="og:description" content="Describe what you need. AIIA builds custom search agents with local AI. Free for Windows." />
+  <meta property="og:type" content="website" />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <nav class="nav">
+      <a href="#" class="logo">
+        <img src="favicon.png" alt="" width="28" height="28" />
+        AIIA
+      </a>
+      <div class="nav-links">
+        <a href="#how" data-i18n="nav.how">How it works</a>
+        <a href="#effort" data-i18n="nav.effort">Effort levels</a>
+        <a href="#features" data-i18n="nav.features">Features</a>
+        <a href="#download" data-i18n="nav.download">Download</a>
+        <a href="#faq" data-i18n="nav.faq">FAQ</a>
+      </div>
+      <div class="lang">
+        <button type="button" data-lang="en" onclick="setLang('en')">EN</button>
+        <button type="button" data-lang="es" onclick="setLang('es')">ES</button>
+      </div>
+    </nav>
+
+    <div class="hero">
+      <h1 data-i18n="hero.title">Local AI agents that search and collect data for you</h1>
+      <p class="hero-sub" data-i18n="hero.subtitle">Describe what you need in plain language.</p>
+      <div class="hero-actions">
+        <a href="#" class="cta" data-href="release" data-i18n="hero.download">Download for Windows</a>
+        <a href="#how" class="cta-secondary" data-i18n="nav.how">How it works</a>
+      </div>
+      <p class="note" data-i18n="hero.note">Free · 100% local · No cloud · No paid APIs</p>
+    </div>
+  </header>
+
+  <main>
+    <section id="how" class="section">
+      <div class="container">
+        <h2 data-i18n="how.title">How it works</h2>
+        <p class="section-sub" data-i18n="how.subtitle">From idea to automated results in five steps</p>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-num">1</span>
+            <div>
+              <h3 data-i18n="how.step1.title">Describe your goal</h3>
+              <p data-i18n="how.step1.desc">Tell AIIA what to find.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">2</span>
+            <div>
+              <h3 data-i18n="how.step2.title">AI builds your agent</h3>
+              <p data-i18n="how.step2.desc">Local AI generates a search strategy.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">3</span>
+            <div>
+              <h3 data-i18n="how.step3.title">Review and publish</h3>
+              <p data-i18n="how.step3.desc">Human review is required.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">4</span>
+            <div>
+              <h3 data-i18n="how.step4.title">Scheduled runs</h3>
+              <p data-i18n="how.step4.desc">Agents run automatically on an interval.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">5</span>
+            <div>
+              <h3 data-i18n="how.step5.title">Results in your inbox</h3>
+              <p data-i18n="how.step5.desc">Filtered results with relevance scores.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="effort" class="section section-alt">
+      <div class="container">
+        <h2 data-i18n="effort.title">Effort levels</h2>
+        <p class="section-sub" data-i18n="effort.subtitle">Pick how deep each run should go</p>
+        <div class="table-wrap">
+          <table class="effort-table">
+            <thead>
+              <tr>
+                <th data-i18n="effort.col.level">Level</th>
+                <th data-i18n="effort.col.time">Typical time</th>
+                <th data-i18n="effort.col.desc">What you get</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong data-i18n="effort.low.name">Fast</strong></td>
+                <td data-i18n="effort.low.time">1–3 min</td>
+                <td data-i18n="effort.low.desc">Quick SERP snippets</td>
+              </tr>
+              <tr>
+                <td><strong data-i18n="effort.medium.name">Standard</strong></td>
+                <td data-i18n="effort.medium.time">5–12 min</td>
+                <td data-i18n="effort.medium.desc">AI plans and ranks sources</td>
+              </tr>
+              <tr>
+                <td><strong data-i18n="effort.high.name">Deep</strong></td>
+                <td data-i18n="effort.high.time">30–60 min</td>
+                <td data-i18n="effort.high.desc">Multi-wave search</td>
+              </tr>
+              <tr>
+                <td><strong data-i18n="effort.super.name">Research</strong></td>
+                <td data-i18n="effort.super.time">1–2 h</td>
+                <td data-i18n="effort.super.desc">Many sector sources</td>
+              </tr>
+              <tr>
+                <td><strong data-i18n="effort.ultra.name">Pro</strong></td>
+                <td data-i18n="effort.ultra.time">2–4 h</td>
+                <td data-i18n="effort.ultra.desc">Maximum coverage</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="container">
+        <h2 data-i18n="features.title">Why AIIA</h2>
+        <div class="features-grid">
+          <article class="feature">
+            <h3 data-i18n="features.agents.title">Custom AI agents</h3>
+            <p data-i18n="features.agents.desc">Jobs, candidates, suppliers.</p>
+          </article>
+          <article class="feature">
+            <h3 data-i18n="features.local.title">100% local</h3>
+            <p data-i18n="features.local.desc">Ollama runs on your PC.</p>
+          </article>
+          <article class="feature">
+            <h3 data-i18n="features.secure.title">Encrypted credentials</h3>
+            <p data-i18n="features.secure.desc">Windows DPAPI encryption.</p>
+          </article>
+          <article class="feature">
+            <h3 data-i18n="features.schedule.title">Scheduled runs</h3>
+            <p data-i18n="features.schedule.desc">Automatic interval runs.</p>
+          </article>
+          <article class="feature">
+            <h3 data-i18n="features.output.title">Flexible output</h3>
+            <p data-i18n="features.output.desc">Inbox, Excel, CSV.</p>
+          </article>
+          <article class="feature">
+            <h3 data-i18n="features.feedback.title">Learns from feedback</h3>
+            <p data-i18n="features.feedback.desc">Mark results useful or not.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="requirements" class="section section-alt">
+      <div class="container">
+        <h2 data-i18n="req.title">Requirements</h2>
+        <ul class="req-list">
+          <li data-i18n="req.windows">Windows 10 or 11</li>
+          <li>
+            <span data-i18n="req.ollama">Ollama installed</span>
+            (<a href="https://ollama.com/download" data-href="ollama" target="_blank" rel="noopener">ollama.com</a>)
+          </li>
+          <li data-i18n="req.ram">8 GB RAM minimum</li>
+          <li data-i18n="req.internet">Internet during runs</li>
+          <li data-i18n="req.no">No paid APIs</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="download" class="section download-section">
+      <div class="container">
+        <h2 data-i18n="download.title">Download AIIA for Windows</h2>
+        <p class="section-sub" data-i18n="download.subtitle">Free desktop installer.</p>
+        <a href="#" class="cta cta-large" data-href="release" data-i18n="download.cta">Download Windows installer (.msi)</a>
+        <p class="download-link">
+          <a href="#" data-href="release" target="_blank" rel="noopener" data-i18n="download.releases">All releases on GitHub</a>
+        </p>
+        <ol class="install-steps">
+          <li data-i18n="download.step1">Install Ollama</li>
+          <li data-i18n="download.step2">Run the AIIA installer</li>
+          <li data-i18n="download.step3">Create your first agent</li>
+        </ol>
+        <p class="note" data-i18n="download.note">First launch may download AI models.</p>
+      </div>
+    </section>
+
+    <section id="faq" class="section section-alt">
+      <div class="container">
+        <h2 data-i18n="faq.title">FAQ</h2>
+        <dl class="faq-list">
+          <div class="faq-item">
+            <dt data-i18n="faq.q1">Is AIIA free?</dt>
+            <dd data-i18n="faq.a1">Yes.</dd>
+          </div>
+          <div class="faq-item">
+            <dt data-i18n="faq.q2">Does my data leave my computer?</dt>
+            <dd data-i18n="faq.a2">No.</dd>
+          </div>
+          <div class="faq-item">
+            <dt data-i18n="faq.q3">How many agents can I run?</dt>
+            <dd data-i18n="faq.a3">Up to 5.</dd>
+          </div>
+          <div class="faq-item">
+            <dt data-i18n="faq.q4">Do I need to be online all the time?</dt>
+            <dd data-i18n="faq.a4">Only during runs.</dd>
+          </div>
+          <div class="faq-item">
+            <dt data-i18n="faq.q5">Which AI models does it use?</dt>
+            <dd data-i18n="faq.a5">Ollama with Qwen 2.5.</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p class="footer-brand">AIIA — <span data-i18n="footer.tagline">Build More Architect Dreams</span></p>
+    <p>
+      <a href="#" data-href="repo" target="_blank" rel="noopener" data-i18n="footer.github">GitHub</a>
+      · <span data-i18n="footer.license">MIT License</span>
+    </p>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="i18n.js"></script>
+</body>
+</html>

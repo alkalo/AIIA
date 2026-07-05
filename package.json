@@ -1,0 +1,23 @@
+{
+  "name": "aiia",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AIIA - Local AI agents for search and data collection",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @aiia/desktop",
+    "build": "npm run build -w @aiia/desktop",
+    "build:packages": "npm run build -w @aiia/ollama-client && npm run build -w @aiia/scraper && npm run build -w @aiia/agent-engine && npm run build -w @aiia/agent-runner && npm run build -w @aiia/credential-runner",
+    "tauri": "npm run tauri -w @aiia/desktop",
+    "tauri:dev": "powershell -ExecutionPolicy Bypass -File scripts/predev.ps1",
+    "tauri:build": "npm run build:packages && npm run tauri build -w @aiia/desktop",
+    "lint": "npm run build:packages",
+    "playwright:install": "npm exec playwright install chromium --prefix packages/scraper"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: aiia-landing
+    runtime: static
+    staticPublishPath: ./landing
+    buildCommand: echo "Static landing — no build"
+    autoDeploy: true
