@@ -8,7 +8,7 @@ const strings = {
     "hero.title": "Local AI agents that search and collect data for you",
     "hero.subtitle":
       "Describe what you need in plain language. AIIA builds a custom agent with local AI, runs it on a schedule, and delivers filtered results to your inbox, Excel, or CSV — all on your PC.",
-    "hero.download": "Download for Windows",
+    "hero.download": "Download",
     "hero.note": "Free · 100% local · No cloud · No paid APIs",
     "how.title": "How it works",
     "how.subtitle": "From idea to automated results in five steps",
@@ -67,14 +67,15 @@ const strings = {
     "features.feedback.desc":
       "Mark results useful or not. AIIA can suggest agent improvements based on your feedback.",
     "req.title": "Requirements",
-    "req.windows": "Windows 10 or 11 (64-bit)",
+    "req.windows": "Windows 10 or 11 (64-bit) or macOS 12+ (Apple Silicon)",
     "req.ollama": "Ollama installed and running",
     "req.ram": "8 GB RAM minimum (16 GB recommended for Deep/Pro modes)",
     "req.internet": "Internet connection during agent runs (for web search only)",
     "req.no": "No Google account, no paid APIs, no cloud storage",
-    "download.title": "Download AIIA for Windows",
-    "download.subtitle": "Free desktop installer. No account required.",
-    "download.cta": "Download Windows installer (.msi)",
+    "download.title": "Download AIIA",
+    "download.subtitle": "Free desktop installer for Windows and macOS. No account required.",
+    "download.ctaWindows": "Download for Windows (.msi)",
+    "download.ctaMac": "Download for macOS (.dmg)",
     "download.releases": "All releases on GitHub",
     "download.step1": "Install Ollama from ollama.com and pull a model (e.g. qwen2.5:7b)",
     "download.step2": "Download and run the AIIA installer",
@@ -108,7 +109,7 @@ const strings = {
     "hero.title": "Agentes de IA local que buscan y recopilan datos por ti",
     "hero.subtitle":
       "Describe lo que necesitas en lenguaje natural. AIIA crea un agente personalizado con IA local, lo ejecuta según programación y entrega resultados filtrados en bandeja, Excel o CSV — todo en tu PC.",
-    "hero.download": "Descargar para Windows",
+    "hero.download": "Descargar",
     "hero.note": "Gratis · 100% local · Sin nube · Sin APIs de pago",
     "how.title": "Cómo funciona",
     "how.subtitle": "De la idea a resultados automáticos en cinco pasos",
@@ -167,14 +168,15 @@ const strings = {
     "features.feedback.desc":
       "Marca resultados útiles o no. AIIA puede sugerir mejoras al agente según tu feedback.",
     "req.title": "Requisitos",
-    "req.windows": "Windows 10 u 11 (64 bits)",
+    "req.windows": "Windows 10 u 11 (64 bits) o macOS 12+ (Apple Silicon)",
     "req.ollama": "Ollama instalado y en ejecución",
     "req.ram": "8 GB RAM mínimo (16 GB recomendado para modos Profundo/Pro)",
     "req.internet": "Conexión a internet durante ejecuciones (solo para búsqueda web)",
     "req.no": "Sin cuenta Google, sin APIs de pago, sin almacenamiento en nube",
-    "download.title": "Descargar AIIA para Windows",
-    "download.subtitle": "Instalador de escritorio gratuito. Sin cuenta.",
-    "download.cta": "Descargar instalador Windows (.msi)",
+    "download.title": "Descargar AIIA",
+    "download.subtitle": "Instalador gratuito para Windows y macOS. Sin cuenta.",
+    "download.ctaWindows": "Descargar para Windows (.msi)",
+    "download.ctaMac": "Descargar para macOS (.dmg)",
     "download.releases": "Todas las versiones en GitHub",
     "download.step1": "Instala Ollama desde ollama.com y descarga un modelo (ej. qwen2.5:7b)",
     "download.step2": "Descarga y ejecuta el instalador de AIIA",
@@ -242,6 +244,34 @@ function applyConfig() {
   document.querySelectorAll("[data-href='ollama']").forEach((el) => {
     el.href = cfg.ollamaUrl;
   });
+  applyReleaseAssetLinks(cfg);
+}
+
+async function applyReleaseAssetLinks(cfg) {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${cfg.githubRepo}/releases/latest`
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    const assets = data.assets || [];
+    const msi = assets.find((a) => a.name?.toLowerCase().endsWith(".msi"));
+    const dmg = assets.find((a) => a.name?.toLowerCase().endsWith(".dmg"));
+    if (msi) {
+      document.querySelectorAll("[data-href='release-windows']").forEach((el) => {
+        el.href = msi.browser_download_url;
+      });
+    }
+    if (dmg) {
+      document.querySelectorAll("[data-href='release-macos']").forEach((el) => {
+        el.href = dmg.browser_download_url;
+      });
+    }
+  } catch {
+    document.querySelectorAll("[data-href='release-windows'], [data-href='release-macos']").forEach((el) => {
+      el.href = cfg.releaseUrl;
+    });
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

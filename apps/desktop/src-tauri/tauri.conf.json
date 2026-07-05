@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AIIA",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "identifier": "com.aiia.desktop",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -24,7 +24,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": ["msi", "dmg"],
+    "resources": {
+      "runner-bundle/": "runner-bundle/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

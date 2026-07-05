@@ -8,7 +8,9 @@ use aiia_core::models::{
     AgentRecord, AgentSpec, AgentStatus, CredentialRecord, EffortLevel, ResultRecord, RunLog,
     MAX_PUBLISHED_AGENTS,
 };
-use aiia_core::scheduler::{spawn_agent_runner, spawn_credential_runner};
+use aiia_core::scheduler::{
+    resolve_node_executable, spawn_agent_runner, spawn_credential_runner, RunnerSpawnConfig,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -20,6 +22,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub runner_path: PathBuf,
     pub credential_runner_path: PathBuf,
+    pub runner_spawn: RunnerSpawnConfig,
     pub(crate) run_queue: Arc<Mutex<RunQueue>>,
 }
 
@@ -517,6 +520,7 @@ fn connect_site(
 
     let output = spawn_credential_runner(
         &state.credential_runner_path,
+        &state.runner_spawn,
         &req.site_id,
         &req.login_url,
         &req.username,
@@ -849,6 +853,7 @@ fn spawn_agent_run_worker(
     db: Arc<Database>,
     data_dir: PathBuf,
     runner_path: PathBuf,
+    runner_spawn: RunnerSpawnConfig,
     run_queue: Arc<Mutex<RunQueue>>,
     agent_id: String,
     effort: String,
@@ -861,12 +866,20 @@ fn spawn_agent_run_worker(
                 db.clone(),
                 data_dir.clone(),
                 runner_path.clone(),
+                runner_spawn.clone(),
                 run_queue.clone(),
                 &agent_id,
             );
         };
 
-        match spawn_agent_runner(&runner_path, &agent_id, &effort, &data_dir, &run_id) {
+        match spawn_agent_runner(
+            &runner_path,
+            &runner_spawn,
+            &agent_id,
+            &effort,
+            &data_dir,
+            &run_id,
+        ) {
             Ok(child) => {
                 let pid = child.id();
                 {
@@ -938,6 +951,7 @@ fn spawn_agent_run_worker(
                                 &effort,
                                 &run_id,
                                 &stdout,
+                                &stderr,
                                 out.status.success(),
                             );
                         }
@@ -966,6 +980,7 @@ fn finish_run_and_start_next(
     db: Arc<Database>,
     data_dir: PathBuf,
     runner_path: PathBuf,
+    runner_spawn: RunnerSpawnConfig,
     run_queue: Arc<Mutex<RunQueue>>,
     completed_agent_id: &str,
 ) {
@@ -997,6 +1012,7 @@ fn finish_run_and_start_next(
             db,
             data_dir,
             runner_path,
+            runner_spawn,
             run_queue,
             queued.agent_id,
             queued.effort,
@@ -1069,6 +1085,7 @@ fn run_agent(
             state.db.clone(),
             state.data_dir.clone(),
             state.runner_path.clone(),
+            state.runner_spawn.clone(),
             state.run_queue.clone(),
             req.agent_id,
             req.effort,
@@ -1193,6 +1210,7 @@ fn finalize_agent_run(
     effort: &str,
     run_id: &str,
     stdout: &str,
+    stderr: &str,
     exit_ok: bool,
 ) {
     let parsed = parse_runner_stdout(stdout);
@@ -1272,8 +1290,17 @@ fn finalize_agent_run(
         let err = parsed
             .as_ref()
             .and_then(|p| p.get("error").and_then(|v| v.as_str()))
-            .unwrap_or("Run failed");
-        let _ = db.set_agent_error(agent_id, err);
+            .map(|s| s.to_string())
+            .or_else(|| {
+                let stderr_line = stderr.trim().lines().last().unwrap_or("").trim();
+                if !stderr_line.is_empty() {
+                    Some(stderr_line.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "Run failed".to_string());
+        let _ = db.set_agent_error(agent_id, &err);
         let _ = app.emit("agent-run-error", err);
     }
 }
@@ -1902,8 +1929,10 @@ pub fn run() {
 
     std::fs::create_dir_all(data_dir_path.join("sessions")).ok();
 
-    let runner_path = resolve_runner_path();
-    let credential_runner_path = resolve_credential_runner_path();
+    let bundle = resolve_runner_bundle();
+    let runner_path = bundle.runner_path;
+    let credential_runner_path = bundle.credential_runner_path;
+    let runner_spawn = bundle.spawn_config;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1921,6 +1950,7 @@ pub fn run() {
             data_dir: data_dir_path,
             runner_path,
             credential_runner_path,
+            runner_spawn,
             run_queue: Arc::new(Mutex::new(RunQueue::default())),
         })
         .invoke_handler(tauri::generate_handler![
@@ -1967,28 +1997,82 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn resolve_runner_path() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let bundled = dir.join("agent-runner").join("dist").join("index.js");
-            if bundled.exists() {
-                return bundled;
-            }
-        }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../packages/agent-runner/dist/index.js")
+struct RunnerBundle {
+    runner_path: PathBuf,
+    credential_runner_path: PathBuf,
+    spawn_config: RunnerSpawnConfig,
 }
 
-fn resolve_credential_runner_path() -> PathBuf {
+fn resolve_runner_bundle() -> RunnerBundle {
+    let node_exe = resolve_node_executable();
+
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let bundled = dir.join("credential-runner").join("dist").join("index.js");
-            if bundled.exists() {
-                return bundled;
+        if let Some(exe_dir) = exe.parent() {
+            let mut bundle_roots = vec![
+                exe_dir.join("resources").join("runner-bundle"),
+                exe_dir.join("runner-bundle"),
+            ];
+            if let Some(contents_dir) = exe_dir.parent() {
+                bundle_roots.push(contents_dir.join("Resources").join("runner-bundle"));
+            }
+
+            for bundle_root in bundle_roots {
+                let runner = bundle_root
+                    .join("node_modules")
+                    .join("@aiia")
+                    .join("agent-runner")
+                    .join("dist")
+                    .join("index.js");
+                if runner.exists() {
+                    let credential = bundle_root
+                        .join("node_modules")
+                        .join("@aiia")
+                        .join("credential-runner")
+                        .join("dist")
+                        .join("index.js");
+                    let playwright = bundle_root.join("ms-playwright");
+                    return RunnerBundle {
+                        runner_path: runner,
+                        credential_runner_path: credential,
+                        spawn_config: RunnerSpawnConfig {
+                            node_exe: node_exe.clone(),
+                            cwd: bundle_root.clone(),
+                            playwright_browsers_path: playwright
+                                .exists()
+                                .then_some(playwright),
+                        },
+                    };
+                }
+            }
+
+            let legacy_runner = exe_dir.join("agent-runner").join("dist").join("index.js");
+            if legacy_runner.exists() {
+                let legacy_cred = exe_dir
+                    .join("credential-runner")
+                    .join("dist")
+                    .join("index.js");
+                return RunnerBundle {
+                    runner_path: legacy_runner,
+                    credential_runner_path: legacy_cred,
+                    spawn_config: RunnerSpawnConfig {
+                        node_exe,
+                        cwd: exe_dir.to_path_buf(),
+                        playwright_browsers_path: None,
+                    },
+                };
             }
         }
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../packages/credential-runner/dist/index.js")
+
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest.join("../../..");
+    RunnerBundle {
+        runner_path: repo_root.join("packages/agent-runner/dist/index.js"),
+        credential_runner_path: repo_root.join("packages/credential-runner/dist/index.js"),
+        spawn_config: RunnerSpawnConfig {
+            node_exe,
+            cwd: repo_root,
+            playwright_browsers_path: None,
+        },
+    }
 }

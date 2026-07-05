@@ -6,6 +6,7 @@ target/
 .DS_Store
 Thumbs.db
 apps/desktop/dist/
+apps/desktop/src-tauri/runner-bundle/
 packages/*/dist/
 _bmad-output/
 *.log

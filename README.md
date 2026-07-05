@@ -1,6 +1,6 @@
 # AIIA — Local AI Search Agents
 
-Desktop Windows app that creates up to 5 local AI agents for automated search and data collection using Ollama + Playwright.
+Desktop app for Windows and macOS that creates up to 5 local AI agents for automated search and data collection using Ollama + Playwright.
 
 ## Features
 
@@ -14,7 +14,7 @@ Desktop Windows app that creates up to 5 local AI agents for automated search an
 
 ## Prerequisites
 
-- Windows 10/11
+- Windows 10/11 or macOS 12+ (Apple Silicon)
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://rustup.rs/)
 - [Ollama](https://ollama.com/) running locally
@@ -36,12 +36,15 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-MSI output: `target/release/bundle/msi/` (Cargo workspace root)
+MSI (Windows): `target/release/bundle/msi/`  
+DMG (macOS): `target/release/bundle/dmg/`
 
-## Download (Windows)
+## Download
 
 - **Landing:** https://aiia-landing.onrender.com
-- **Installer:** https://github.com/alkalo/AIIA/releases/latest
+- **Releases:** https://github.com/alkalo/AIIA/releases/latest
+  - Windows: `.msi` installer
+  - macOS: `.dmg` (Apple Silicon)
 
 ## Project structure
 
