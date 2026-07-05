@@ -6,6 +6,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -34,16 +37,21 @@ jobs:
         env:
           CI: true
 
+      - name: List bundle output
+        run: Get-ChildItem -Recurse target/release/bundle -ErrorAction SilentlyContinue
+
       - name: Upload MSI
         uses: actions/upload-artifact@v4
         with:
           name: aiia-windows-msi
-          path: apps/desktop/src-tauri/target/release/bundle/msi/*.msi
+          path: target/release/bundle/msi/*.msi
+          if-no-files-found: error
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: apps/desktop/src-tauri/target/release/bundle/msi/*.msi
+          files: target/release/bundle/msi/*.msi
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
