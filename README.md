@@ -36,7 +36,12 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-MSI output: `apps/desktop/src-tauri/target/release/bundle/msi/`
+MSI output: `target/release/bundle/msi/` (Cargo workspace root)
+
+## Download (Windows)
+
+- **Landing:** https://aiia-landing.onrender.com
+- **Installer:** https://github.com/alkalo/AIIA/releases/latest
 
 ## Project structure
 
@@ -58,7 +63,7 @@ AIIA/
 
 ## Landing page (Render)
 
-Live site: **https://aiia-landing.onrender.com** (after deploy)
+Live site: **https://aiia-landing.onrender.com**
 
 Deploy `landing/` as a static site on Render (free tier). See `render.yaml`.
 
