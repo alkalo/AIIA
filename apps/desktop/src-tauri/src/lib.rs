@@ -17,6 +17,8 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
+mod ollama;
+
 pub struct AppState {
     pub db: Arc<Database>,
     pub data_dir: PathBuf,
@@ -132,19 +134,29 @@ fn sysinfo_mem_gb() -> u64 {
 
 #[tauri::command]
 async fn check_ollama() -> Result<bool, String> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(2))
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .map_err(|e| e.to_string())?;
-    match client
-        .get("http://127.0.0.1:11434/api/tags")
-        .send()
-        .await
-    {
-        Ok(r) => Ok(r.status().is_success()),
-        Err(_) => Ok(false),
-    }
+    Ok(ollama::ollama_is_running().await)
+}
+
+#[tauri::command]
+async fn get_ollama_status() -> Result<ollama::OllamaStatus, String> {
+    let ram = sysinfo_mem_gb();
+    Ok(ollama::get_status(ram).await)
+}
+
+#[tauri::command]
+async fn setup_ollama(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pull_model: Option<bool>,
+) -> Result<ollama::OllamaStatus, String> {
+    let ram = sysinfo_mem_gb();
+    ollama::setup_ollama(
+        app,
+        state.data_dir.clone(),
+        ram,
+        pull_model.unwrap_or(true),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1956,6 +1968,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_hardware_info,
             check_ollama,
+            get_ollama_status,
+            setup_ollama,
             list_agents,
             get_agent,
             save_agent,

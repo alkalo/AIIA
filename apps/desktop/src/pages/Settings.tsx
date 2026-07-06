@@ -1,13 +1,19 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
 import { SiteConnectorAgent, type SiteConnectionPlan } from "@aiia/agent-engine/browser";
-import { api, type CredentialSummary } from "../api";
+import { api, type CredentialSummary, type OllamaSetupProgress } from "../api";
 
 type WizardStep = "idle" | "plan" | "connect";
 
 export function Settings() {
   const { t, i18n } = useTranslation();
   const [ollamaOk, setOllamaOk] = useState(false);
+  const [ollamaInstalled, setOllamaInstalled] = useState(false);
+  const [recommendedModel, setRecommendedModel] = useState("");
+  const [setupProgress, setSetupProgress] = useState<OllamaSetupProgress | null>(null);
+  const [settingUpOllama, setSettingUpOllama] = useState(false);
+  const [setupError, setSetupError] = useState("");
   const [hw, setHw] = useState<{ total_ram_gb: number; cpu_cores: number; profile: string } | null>(
     null
   );
@@ -28,11 +34,28 @@ export function Settings() {
   const refreshCredentials = () => api.listCredentials().then(setCredentials);
 
   useEffect(() => {
-    api.checkOllama().then(setOllamaOk);
+    api.getOllamaStatus().then((status) => {
+      setOllamaOk(status.running);
+      setOllamaInstalled(status.installed);
+      setRecommendedModel(status.recommendedModel);
+    });
     api.getHardwareInfo().then(setHw);
     api.getDataDir().then(setDataDir);
     api.getSetting("retention_days").then((v) => v && setRetention(v));
     refreshCredentials();
+
+    let unlisten: (() => void) | undefined;
+    listen<OllamaSetupProgress>("ollama-setup-progress", (event) => {
+      setSetupProgress(event.payload);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   const resetWizard = () => {
@@ -43,6 +66,23 @@ export function Settings() {
     setUsername("");
     setPassword("");
     setError("");
+  };
+
+  const handleSetupOllama = async () => {
+    setSettingUpOllama(true);
+    setSetupError("");
+    setSetupProgress({ phase: "downloading", percent: 0, message: t("settings.ollamaSetupStarting") });
+    try {
+      const status = await api.setupOllama(true);
+      setOllamaOk(status.running);
+      setOllamaInstalled(status.installed);
+      setRecommendedModel(status.recommendedModel);
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSettingUpOllama(false);
+      setSetupProgress(null);
+    }
   };
 
   const handleSaveRetention = async () => {
@@ -107,6 +147,39 @@ export function Settings() {
         <p className={ollamaOk ? "status-ok" : "error-text"}>
           {ollamaOk ? t("settings.ollamaOk") : t("settings.ollamaFail")}
         </p>
+        {!ollamaOk && (
+          <div style={{ marginTop: "0.75rem" }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleSetupOllama}
+              disabled={settingUpOllama}
+            >
+              {settingUpOllama
+                ? t("settings.ollamaSettingUp")
+                : ollamaInstalled
+                  ? t("settings.ollamaStart")
+                  : t("settings.ollamaInstall")}
+            </button>
+            {recommendedModel && (
+              <p className="hint-text" style={{ marginTop: "0.5rem" }}>
+                {t("settings.ollamaModel")}: {recommendedModel}
+              </p>
+            )}
+            {setupProgress && (
+              <div className="onboarding-progress">
+                <p className="hint-text">{setupProgress.message}</p>
+                <div className="progress-bar-track">
+                  <div
+                    className="progress-bar-fill"
+                    style={{ width: `${Math.max(setupProgress.percent, 4)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            {setupError && <p className="error-text">{setupError}</p>}
+          </div>
+        )}
         {hw && (
           <p>
             {t("settings.hardware")}: {hw.profile} ({hw.total_ram_gb} GB RAM, {hw.cpu_cores} cores)

@@ -28,6 +28,19 @@ export interface HardwareInfo {
   profile: string;
 }
 
+export interface OllamaStatus {
+  installed: boolean;
+  running: boolean;
+  models: string[];
+  recommendedModel: string;
+}
+
+export interface OllamaSetupProgress {
+  phase: string;
+  percent: number;
+  message: string;
+}
+
 export interface CredentialSummary {
   id: string;
   siteId: string;
@@ -64,6 +77,9 @@ export interface RunLog {
 export const api = {
   getHardwareInfo: () => invoke<HardwareInfo>("get_hardware_info"),
   checkOllama: () => invoke<boolean>("check_ollama"),
+  getOllamaStatus: () => invoke<OllamaStatus>("get_ollama_status"),
+  setupOllama: (pullModel = true) =>
+    invoke<OllamaStatus>("setup_ollama", { pullModel }),
   listAgents: () => invoke<AgentRecord[]>("list_agents"),
   getAgent: (id: string) => invoke<AgentRecord>("get_agent", { id }),
   saveAgent: (spec: AgentSpec) => invoke<AgentRecord>("save_agent", { spec }),

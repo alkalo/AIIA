@@ -68,7 +68,7 @@ const strings = {
       "Mark results useful or not. AIIA can suggest agent improvements based on your feedback.",
     "req.title": "Requirements",
     "req.windows": "Windows 10 or 11 (64-bit) or macOS 12+ (Apple Silicon)",
-    "req.ollama": "Ollama installed and running",
+    "req.ollama": "Internet on first launch (AIIA installs Ollama for you)",
     "req.ram": "8 GB RAM minimum (16 GB recommended for Deep/Pro modes)",
     "req.internet": "Internet connection during agent runs (for web search only)",
     "req.no": "No Google account, no paid APIs, no cloud storage",
@@ -77,10 +77,10 @@ const strings = {
     "download.ctaWindows": "Download for Windows (.msi)",
     "download.ctaMac": "Download for macOS (.dmg)",
     "download.releases": "All releases on GitHub",
-    "download.step1": "Install Ollama from ollama.com and pull a model (e.g. qwen2.5:7b)",
-    "download.step2": "Download and run the AIIA installer",
-    "download.step3": "Open AIIA, complete onboarding, and create your first agent",
-    "download.note": "First launch may download AI models automatically based on your hardware.",
+    "download.step1": "Download and run the AIIA installer",
+    "download.step2": "On first launch, AIIA installs Ollama and the recommended AI model for your PC",
+    "download.step3": "Create your first agent",
+    "download.note": "First launch needs internet to download Ollama and AI models. After setup, everything runs locally.",
     "faq.title": "FAQ",
     "faq.q1": "Is AIIA free?",
     "faq.a1":
@@ -169,7 +169,7 @@ const strings = {
       "Marca resultados útiles o no. AIIA puede sugerir mejoras al agente según tu feedback.",
     "req.title": "Requisitos",
     "req.windows": "Windows 10 u 11 (64 bits) o macOS 12+ (Apple Silicon)",
-    "req.ollama": "Ollama instalado y en ejecución",
+    "req.ollama": "Internet en el primer arranque (AIIA instala Ollama por ti)",
     "req.ram": "8 GB RAM mínimo (16 GB recomendado para modos Profundo/Pro)",
     "req.internet": "Conexión a internet durante ejecuciones (solo para búsqueda web)",
     "req.no": "Sin cuenta Google, sin APIs de pago, sin almacenamiento en nube",
@@ -178,10 +178,10 @@ const strings = {
     "download.ctaWindows": "Descargar para Windows (.msi)",
     "download.ctaMac": "Descargar para macOS (.dmg)",
     "download.releases": "Todas las versiones en GitHub",
-    "download.step1": "Instala Ollama desde ollama.com y descarga un modelo (ej. qwen2.5:7b)",
-    "download.step2": "Descarga y ejecuta el instalador de AIIA",
-    "download.step3": "Abre AIIA, completa el onboarding y crea tu primer agente",
-    "download.note": "El primer arranque puede descargar modelos de IA según tu hardware.",
+    "download.step1": "Descarga y ejecuta el instalador de AIIA",
+    "download.step2": "En el primer arranque, AIIA instala Ollama y el modelo de IA recomendado para tu PC",
+    "download.step3": "Crea tu primer agente",
+    "download.note": "El primer arranque necesita internet para descargar Ollama y los modelos. Después, todo corre en local.",
     "faq.title": "Preguntas frecuentes",
     "faq.q1": "¿AIIA es gratis?",
     "faq.a1":
@@ -240,9 +240,6 @@ function applyConfig() {
   });
   document.querySelectorAll("[data-href='repo']").forEach((el) => {
     el.href = cfg.repoUrl;
-  });
-  document.querySelectorAll("[data-href='ollama']").forEach((el) => {
-    el.href = cfg.ollamaUrl;
   });
   applyReleaseAssetLinks(cfg);
 }
