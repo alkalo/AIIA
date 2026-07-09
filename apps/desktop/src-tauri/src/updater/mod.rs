@@ -422,7 +422,7 @@ async fn install_windows(
     let parent_pid = std::process::id();
     deferred::launch_msi_install_after_quit(&dest, &install_dir, parent_pid)?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(3500)).await;
     app.exit(0);
     Ok(())
 }
@@ -490,7 +490,7 @@ async fn install_macos(
     let parent_pid = std::process::id();
     deferred::launch_dmg_install_after_quit(&dest, &app_path, parent_pid)?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(3500)).await;
     app.exit(0);
     Ok(())
 }

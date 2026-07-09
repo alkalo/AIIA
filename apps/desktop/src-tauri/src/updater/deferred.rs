@@ -41,11 +41,6 @@ fn resolve_powershell() -> String {
     "powershell.exe".to_string()
 }
 
-fn resolve_wscript() -> PathBuf {
-    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
-    PathBuf::from(windir).join("System32").join("wscript.exe")
-}
-
 fn build_stop_aiia_ps() -> &'static str {
     r#"
 function Get-AIIARootCandidates {
@@ -70,10 +65,10 @@ function Test-AIIAProcessMatch {
   if ($ProcessId -gt 0 -and $ExcludeProcessIds -contains $ProcessId) { return $false }
   $procName = ($Name -replace '\.exe$','')
   if ($procName -ieq 'powershell' -or $procName -ieq 'pwsh' -or $procName -ieq 'cmd') {
-    if ($CommandLine -match 'run-msi-after-quit\.ps1|AIIAUpdateHelper|aiia-upd-') { return $false }
+    if ($CommandLine -match 'run-msi-after-quit\.ps1|AIIAUpdateHelper|aiia-upd-|aiia-watch-') { return $false }
   }
   if ($procName -ieq 'wscript' -or $procName -ieq 'cscript') {
-    if ($CommandLine -match 'AIIAUpdateHelper|launch-update-helper\.vbs|aiia-upd-') { return $false }
+    if ($CommandLine -match 'AIIAUpdateHelper|launch-update-helper\.vbs|aiia-upd-|aiia-watch-') { return $false }
   }
   if ($procName -ieq 'AIIA' -or $procName -ieq 'aiia-desktop') { return $true }
   foreach ($root in $RootDirs) {
@@ -144,8 +139,16 @@ function Resolve-AIIAExe {
   $candidates = @()
   if ($InstallDir) { $candidates += (Join-Path $InstallDir 'AIIA.exe') }
   $candidates += (Join-Path $env:LOCALAPPDATA 'Programs\AIIA\AIIA.exe')
+  $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\AIIA.lnk'
+  if (Test-Path -LiteralPath $startMenu) {
+    try {
+      $ws = New-Object -ComObject WScript.Shell
+      $target = $ws.CreateShortcut($startMenu).TargetPath
+      if ($target) { $candidates += $target }
+    } catch {}
+  }
   foreach ($candidate in $candidates) {
-    if (Test-Path -LiteralPath $candidate) { return $candidate }
+    if ($candidate -and (Test-Path -LiteralPath $candidate)) { return $candidate }
   }
   return $null
 }
@@ -158,16 +161,25 @@ function Test-AIIAMainProcessRunning {
 }
 
 function Start-AIIAApp {
-  param([string]$ExePath, [int]$Retries = 8, [int[]]$ExcludeProcessIds = @())
+  param([string]$ExePath, [int]$Retries = 10, [int[]]$ExcludeProcessIds = @())
   if (-not $ExePath -or -not (Test-Path -LiteralPath $ExePath)) { return $false }
   $dir = Split-Path -Parent $ExePath
   for ($i = 0; $i -lt $Retries; $i++) {
-    if ($i -gt 0) {
-      Stop-AIIATree -RootDir $dir -ExcludeProcessIds $ExcludeProcessIds
-      Start-Sleep -Milliseconds 800
-    }
-    Start-Process -FilePath $ExePath -WorkingDirectory $dir -WindowStyle Normal
-    Start-Sleep -Seconds 6
+    if ($i -gt 0) { Start-Sleep -Seconds 2 }
+    try {
+      Start-Process -FilePath $ExePath -WorkingDirectory $dir -WindowStyle Normal -ErrorAction Stop
+    } catch {}
+    Start-Sleep -Seconds 4
+    if (Test-AIIAMainProcessRunning) { return $true }
+    try {
+      Start-Process -FilePath 'explorer.exe' -ArgumentList @($ExePath) -ErrorAction Stop
+    } catch {}
+    Start-Sleep -Seconds 4
+    if (Test-AIIAMainProcessRunning) { return $true }
+    try {
+      Start-Process -FilePath "$env:WINDIR\System32\cmd.exe" -ArgumentList @('/c', 'start', '""', "`"$ExePath`"") -WindowStyle Hidden -ErrorAction Stop
+    } catch {}
+    Start-Sleep -Seconds 4
     if (Test-AIIAMainProcessRunning) { return $true }
   }
   return $false
@@ -181,50 +193,18 @@ function Show-AIIARestartFailure {
   } catch {}
 }
 
-function Start-AIIARelaunchWatchdog {
-  param([string]$ExePath, [int]$DelaySec = 12, [int]$MaxWaitSec = 180)
+function Register-AIIARelaunchTask {
+  param([string]$ExePath)
   if (-not $ExePath -or -not (Test-Path -LiteralPath $ExePath)) { return $false }
-  $vbsPath = Join-Path $env:TEMP ("aiia-watch-" + [Guid]::NewGuid().ToString('N').Substring(0, 10) + ".vbs")
-  $escapedExe = $ExePath.Replace('"', '""')
-  $content = @"
-' AIIAUpdateHelper relaunch watchdog
-Function TestMainRunning()
-  TestMainRunning = False
-  Set procs = GetObject("winmgmts:").ExecQuery("SELECT Name FROM Win32_Process WHERE Name='AIIA.exe'")
-  If procs.Count > 0 Then TestMainRunning = True
-End Function
-WScript.Sleep $($DelaySec * 1000)
-Set sh = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
-exe = "$escapedExe"
-deadline = DateAdd("s", $MaxWaitSec, Now)
-Do While Now < deadline
-  If Not fso.FileExists(exe) Then Exit Do
-  If TestMainRunning() Then Exit Do
-  WScript.Sleep 3000
-Loop
-If fso.FileExists(exe) Then
-  If Not TestMainRunning() Then sh.Run Chr(34) & exe & Chr(34), 1, False
-End If
-On Error Resume Next
-fso.DeleteFile WScript.ScriptFullName, True
-"@
-  Set-Content -LiteralPath $vbsPath -Value $content -Encoding ASCII
-  Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList @('//B','//Nologo',$vbsPath) -WindowStyle Hidden
-  return $true
-}
-
-function Wait-AIIARunning {
-  param([int]$TimeoutSec = 60, [int]$StableChecks = 3)
-  $stable = 0
-  for ($w = 0; $w -lt $TimeoutSec; $w++) {
-    if (Test-AIIAMainProcessRunning) {
-      $stable++
-      if ($stable -ge $StableChecks) { return $true }
-    } else { $stable = 0 }
-    Start-Sleep -Seconds 1
-  }
-  return $false
+  $taskName = 'AIIAUpdateRelaunch'
+  $escaped = $ExePath.Replace('"', '\"')
+  schtasks /Delete /TN $taskName /F 2>$null | Out-Null
+  $create = schtasks /Create /TN $taskName /TR "`"$escaped`"" /SC ONCE /ST 00:00 /SD 01/01/2000 /F /RL LIMITED 2>&1
+  if ($LASTEXITCODE -ne 0) { return $false }
+  schtasks /Run /TN $taskName 2>&1 | Out-Null
+  Start-Sleep -Seconds 2
+  schtasks /Delete /TN $taskName /F 2>$null | Out-Null
+  return (Test-AIIAMainProcessRunning)
 }
 "#
 }
@@ -253,19 +233,21 @@ if ($parentPid -gt 0) {{
 }}
 $ready = Wait-AIIAExit -RootDir $installDir -TimeoutSec 90 -ExcludeProcessIds @($updaterPid)
 "$(Get-Date -Format o) AIIA exited=$ready; MSI: $installer" | Out-File -LiteralPath $log -Append -Encoding utf8
-$exe = Resolve-AIIAExe -InstallDir $installDir
-if ($exe) {{ Start-AIIARelaunchWatchdog -ExePath $exe -DelaySec 12 -MaxWaitSec 180 }}
-$proc = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" -ArgumentList @('/i', $installer, '/qn', '/norestart') -PassThru -Wait
+$proc = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" -ArgumentList @('/i', $installer, '/qn', '/norestart', 'REBOOT=ReallySuppress') -PassThru -Wait
 $exitCode = if ($proc) {{ $proc.ExitCode }} else {{ -1 }}
 "$(Get-Date -Format o) MSI exit: $exitCode" | Out-File -LiteralPath $log -Append -Encoding utf8
-if (Wait-AIIARunning -TimeoutSec 60 -StableChecks 3) {{
+Start-Sleep -Seconds 4
+$exe = Resolve-AIIAExe -InstallDir $installDir
+"$(Get-Date -Format o) Resolved exe: $exe" | Out-File -LiteralPath $log -Append -Encoding utf8
+if (-not $exe) {{
+  Show-AIIARestartFailure -ExePath (Join-Path $installDir 'AIIA.exe')
   Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-  exit 0
+  exit 1
 }}
-if ($exe) {{
-  $started = Start-AIIAApp -ExePath $exe -ExcludeProcessIds @($updaterPid)
-  if (-not $started) {{ Show-AIIARestartFailure -ExePath $exe }}
-}}
+$started = Start-AIIAApp -ExePath $exe -ExcludeProcessIds @($updaterPid)
+if (-not $started) {{ $started = Register-AIIARelaunchTask -ExePath $exe }}
+"$(Get-Date -Format o) Restart started=$started" | Out-File -LiteralPath $log -Append -Encoding utf8
+if (-not $started) {{ Show-AIIARestartFailure -ExePath $exe }}
 Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 "#,
         stop_fn = build_stop_aiia_ps(),
@@ -273,56 +255,42 @@ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
     );
 
     let script_path = write_script("run-msi-after-quit.ps1", &script);
-    launch_deferred_powershell(&script_path)
+    launch_detached_powershell(&script_path)
 }
 
 #[cfg(windows)]
-fn launch_deferred_powershell(script_path: &Path) -> Result<(), String> {
+fn launch_detached_powershell(script_path: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+
     let ps = resolve_powershell();
-    let args = [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        &script_path.to_string_lossy(),
-    ];
-
-    let command = format!(
-        "\"{}\" {}",
-        ps,
-        args.iter()
-            .map(|a| format!("\"{}\"", a.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-
-    let vbs = format!(
-        r#"' {UPDATE_HELPER_MARK} deferred launcher
-Set sh = CreateObject("WScript.Shell")
-sh.Run "{cmd}", 0, False
-On Error Resume Next
-Set fso = CreateObject("Scripting.FileSystemObject")
-fso.DeleteFile WScript.ScriptFullName, True
-"#,
-        cmd = command.replace('"', "\"\""),
-    );
-
-    let vbs_path = write_script("launch-update-helper.vbs", &vbs);
     append_log(&format!(
-        "{} [rust] launching deferred update vbs={}",
+        "{} [rust] launching detached update ps={} script={}",
         chrono::Utc::now().to_rfc3339(),
-        vbs_path.display()
+        ps,
+        script_path.display()
     ));
 
-    let wscript = resolve_wscript();
-    let status = Command::new(&wscript)
-        .args(["//B", "//Nologo", &vbs_path.to_string_lossy()])
+    Command::new(&ps)
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            &script_path.to_string_lossy(),
+        ])
+        .creation_flags(
+            CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+        )
         .spawn()
         .map_err(|e| format!("Could not launch update helper: {e}"))?;
 
-    drop(status);
     Ok(())
 }
 
@@ -352,7 +320,12 @@ done
 MOUNT=$(hdiutil attach -nobrowse -quiet "{dmg}" | tail -1 | awk '{{print $NF}}')
 cp -R "$MOUNT/AIIA.app" "{app}" 2>/dev/null || cp -R "$MOUNT/"*.app "{app}/.." 2>/dev/null || true
 hdiutil detach "$MOUNT" -quiet || true
+sleep 2
 open -a "{app}"
+sleep 4
+if ! pgrep -f "AIIA.app/Contents/MacOS" >/dev/null; then
+  open -n -a "{app}"
+fi
 echo "$(date -Iseconds) DMG install complete" >> "$LOG"
 rm -f "$0"
 "#,
