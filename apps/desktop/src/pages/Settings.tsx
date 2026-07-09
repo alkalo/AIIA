@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { SiteConnectorAgent, type SiteConnectionPlan } from "@aiia/agent-engine/browser";
-import { api, type CredentialSummary, type OllamaSetupProgress } from "../api";
+import { api, type CredentialSummary, type OllamaSetupProgress, type UpdateStatus, type AppInfo } from "../api";
 
 type WizardStep = "idle" | "plan" | "connect";
 
@@ -20,6 +20,11 @@ export function Settings() {
   const [dataDir, setDataDir] = useState("");
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [retention, setRetention] = useState("90");
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [updateError, setUpdateError] = useState("");
 
   const [siteName, setSiteName] = useState("");
   const [wizardStep, setWizardStep] = useState<WizardStep>("idle");
@@ -42,7 +47,18 @@ export function Settings() {
     api.getHardwareInfo().then(setHw);
     api.getDataDir().then(setDataDir);
     api.getSetting("retention_days").then((v) => v && setRetention(v));
+    api.getAppInfo().then(setAppInfo);
+    api.getUpdatePrefs().then((prefs) => setAutoUpdate(prefs.autoUpdateOnStartup));
     refreshCredentials();
+
+    let unlistenUpdate: (() => void) | undefined;
+    listen<UpdateStatus>("update-status", (event) => {
+      setUpdateStatus(event.payload);
+    })
+      .then((fn) => {
+        unlistenUpdate = fn;
+      })
+      .catch(() => undefined);
 
     let unlisten: (() => void) | undefined;
     listen<OllamaSetupProgress>("ollama-setup-progress", (event) => {
@@ -55,6 +71,7 @@ export function Settings() {
 
     return () => {
       unlisten?.();
+      unlistenUpdate?.();
     };
   }, []);
 
@@ -88,6 +105,40 @@ export function Settings() {
   const handleSaveRetention = async () => {
     await api.setSetting("retention_days", retention);
   };
+
+  const handleCheckUpdates = async () => {
+    setUpdateBusy(true);
+    setUpdateError("");
+    setUpdateStatus({ phase: "checking", message: t("settings.checkingUpdates") });
+    try {
+      const result = await api.checkForUpdates(true, true);
+      if (result.busy) {
+        setUpdateError(t("settings.checkingUpdates"));
+        return;
+      }
+      if (result.dev) {
+        setUpdateStatus({ phase: "idle", message: t("settings.updateDevMode") });
+        return;
+      }
+      if (result.error) {
+        setUpdateError(result.error);
+      }
+    } catch (e) {
+      setUpdateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUpdateBusy(false);
+    }
+  };
+
+  const handleAutoUpdateToggle = async (enabled: boolean) => {
+    setAutoUpdate(enabled);
+    await api.setUpdatePrefs(enabled);
+  };
+
+  const updateProgress =
+    updateStatus?.phase === "downloading" && updateStatus.percent != null
+      ? updateStatus.percent
+      : null;
 
   const handleAnalyze = async () => {
     if (!siteName.trim()) return;
@@ -200,6 +251,71 @@ export function Settings() {
         />
         <button type="button" className="btn btn-sm" onClick={handleSaveRetention}>
           {t("common.save")}
+        </button>
+      </div>
+
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <h3>{t("settings.app")}</h3>
+        <p>
+          {t("settings.appVersion")}: <strong>v{appInfo?.version ?? "…"}</strong>
+        </p>
+        {appInfo?.updateSupported ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleCheckUpdates}
+              disabled={updateBusy}
+              style={{ marginTop: "0.5rem" }}
+            >
+              {updateBusy ? t("settings.checkingUpdates") : t("settings.checkUpdates")}
+            </button>
+            {updateStatus?.message && (
+              <p className="hint-text" style={{ marginTop: "0.5rem" }}>
+                {updateStatus.message}
+                {updateStatus.version && updateStatus.phase !== "idle"
+                  ? ` (v${updateStatus.version})`
+                  : ""}
+              </p>
+            )}
+            {updateStatus?.releaseNotes && updateStatus.phase === "available" && (
+              <pre
+                className="hint-text"
+                style={{ marginTop: "0.5rem", whiteSpace: "pre-wrap", fontSize: "0.85rem" }}
+              >
+                {updateStatus.releaseNotes}
+              </pre>
+            )}
+            {updateProgress != null && (
+              <div className="onboarding-progress" style={{ marginTop: "0.5rem" }}>
+                <div className="progress-bar-track">
+                  <div
+                    className="progress-bar-fill"
+                    style={{ width: `${Math.max(updateProgress, 4)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.75rem" }}>
+              <input
+                type="checkbox"
+                checked={autoUpdate}
+                onChange={(e) => void handleAutoUpdateToggle(e.target.checked)}
+              />
+              {t("settings.autoUpdate")}
+            </label>
+          </>
+        ) : (
+          <p className="hint-text">{t("settings.updateDevMode")}</p>
+        )}
+        {updateError && <p className="error-text">{updateError}</p>}
+        <button
+          type="button"
+          className="btn btn-sm"
+          style={{ marginTop: "0.5rem" }}
+          onClick={() => void api.openUrl("https://github.com/alkalo/AIIA/releases/latest")}
+        >
+          {t("settings.openReleases")}
         </button>
       </div>
 

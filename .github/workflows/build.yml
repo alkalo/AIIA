@@ -83,10 +83,42 @@ jobs:
       - name: List release files
         run: find artifacts -type f
 
+      - name: Generate release manifest
+        run: |
+          python3 << 'PY'
+          import hashlib, json, os, re
+          from pathlib import Path
+
+          artifacts = {}
+          for path in Path("artifacts").rglob("*"):
+              if not path.is_file():
+                  continue
+              name = path.name.lower()
+              kind = None
+              if name.endswith(".msi") and "aiia" in name:
+                  kind = "msi"
+              elif name.endswith(".dmg") and "aiia" in name:
+                  kind = "dmg"
+              if not kind:
+                  continue
+              sha = hashlib.sha256(path.read_bytes()).hexdigest()
+              artifacts[kind] = {
+                  "file": path.name,
+                  "sha256": sha,
+                  "url": f"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/{path.name}",
+              }
+
+          manifest = {"version": "${{ github.ref_name }}".lstrip("v"), "assets": artifacts}
+          Path("release-manifest.json").write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          PY
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**
+          files: |
+            artifacts/**
+            release-manifest.json
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

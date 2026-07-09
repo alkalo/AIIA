@@ -74,6 +74,41 @@ export interface RunLog {
   lineCount: number;
 }
 
+export interface UpdateStatus {
+  phase: string;
+  version?: string;
+  percent?: number;
+  message: string;
+  releaseNotes?: string;
+  currentVersion?: string;
+  upToDate?: boolean;
+}
+
+export interface AppInfo {
+  version: string;
+  isPackaged: boolean;
+  updateSupported: boolean;
+  platform: string;
+}
+
+export interface UpdateCheckResult {
+  upToDate: boolean;
+  available?: boolean;
+  version?: string;
+  currentVersion?: string;
+  releaseNotes?: string;
+  installing?: boolean;
+  declined?: boolean;
+  dev?: boolean;
+  busy?: boolean;
+  error?: string;
+  noReleases?: boolean;
+}
+
+export interface UpdatePrefs {
+  autoUpdateOnStartup: boolean;
+}
+
 export const api = {
   getHardwareInfo: () => invoke<HardwareInfo>("get_hardware_info"),
   checkOllama: () => invoke<boolean>("check_ollama"),
@@ -153,4 +188,10 @@ export const api = {
   deleteRun: (runId: string) => invoke("delete_run", { runId }),
   getRunLog: (runId: string, agentId?: string) =>
     invoke<RunLog>("get_run_log", { runId, agentId }),
+  getAppInfo: () => invoke<AppInfo>("get_app_info"),
+  checkForUpdates: (autoInstall = false, manual = true) =>
+    invoke<UpdateCheckResult>("check_for_updates", { autoInstall, manual }),
+  getUpdatePrefs: () => invoke<UpdatePrefs>("get_update_prefs"),
+  setUpdatePrefs: (autoUpdateOnStartup: boolean) =>
+    invoke<UpdatePrefs>("set_update_prefs", { autoUpdateOnStartup }),
 };

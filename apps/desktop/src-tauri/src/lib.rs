@@ -18,6 +18,7 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 mod ollama;
+mod updater;
 
 pub struct AppState {
     pub db: Arc<Database>,
@@ -602,6 +603,48 @@ fn delete_credential(state: State<AppState>, id: String) -> Result<(), String> {
     let _ = std::fs::remove_file(session_path);
     remove_credential_index_entry(&state.data_dir, &site_id)?;
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdatePrefsDto {
+    auto_update_on_startup: bool,
+}
+
+#[tauri::command]
+fn get_app_info() -> updater::AppInfo {
+    updater::get_app_info()
+}
+
+#[tauri::command]
+async fn check_for_updates(
+    app: AppHandle,
+    auto_install: Option<bool>,
+    manual: Option<bool>,
+) -> Result<updater::UpdateCheckResult, String> {
+    Ok(updater::check_for_updates(app, auto_install.unwrap_or(false), manual.unwrap_or(false)).await)
+}
+
+#[tauri::command]
+fn get_update_prefs(state: State<AppState>) -> UpdatePrefsDto {
+    let enabled = updater::read_auto_update_pref(|key| {
+        state.db.get_setting(key).ok().flatten()
+    });
+    UpdatePrefsDto {
+        auto_update_on_startup: enabled,
+    }
+}
+
+#[tauri::command]
+fn set_update_prefs(state: State<AppState>, auto_update_on_startup: bool) -> Result<UpdatePrefsDto, String> {
+    let value = if auto_update_on_startup { "1" } else { "0" };
+    state
+        .db
+        .set_setting(updater::AUTO_UPDATE_SETTING_KEY, value)
+        .map_err(|e| e.to_string())?;
+    Ok(UpdatePrefsDto {
+        auto_update_on_startup,
+    })
 }
 
 #[tauri::command]
@@ -1945,16 +1988,24 @@ pub fn run() {
     let runner_path = bundle.runner_path;
     let credential_runner_path = bundle.credential_runner_path;
     let runner_spawn = bundle.spawn_config;
+    let db_for_startup = db.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
+        .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+
+            let app_handle = app.handle().clone();
+            let db = db_for_startup.clone();
+            updater::startup_update_check(app_handle, move |key| {
+                db.get_setting(key).ok().flatten()
+            });
+
             Ok(())
         })
         .manage(AppState {
@@ -2006,6 +2057,10 @@ pub fn run() {
             cancel_run,
             delete_run,
             get_run_log,
+            get_app_info,
+            check_for_updates,
+            get_update_prefs,
+            set_update_prefs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
