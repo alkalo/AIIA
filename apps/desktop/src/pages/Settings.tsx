@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { SiteConnectorAgent, type SiteConnectionPlan } from "@aiia/agent-engine/browser";
+import {
+  DesktopOllamaClient,
+  formatOllamaError,
+  prepareOllamaForPlanner,
+} from "../ollama-desktop";
 import { api, type CredentialSummary, type OllamaSetupProgress, type UpdateStatus, type AppInfo } from "../api";
 
 type WizardStep = "idle" | "plan" | "connect";
@@ -142,22 +147,19 @@ export function Settings() {
 
   const handleAnalyze = async () => {
     if (!siteName.trim()) return;
-    if (!ollamaOk) {
-      setError(t("settings.ollamaRequired"));
-      return;
-    }
     setAnalyzing(true);
     setError("");
     try {
       const profile = hw?.profile ?? "medium";
-      const connector = new SiteConnectorAgent(profile);
+      await prepareOllamaForPlanner(profile);
+      const connector = new SiteConnectorAgent(profile, new DesktopOllamaClient());
       const lang = i18n.language.startsWith("es") ? "es" : "en";
       const result = await connector.analyzeSite(siteName.trim(), lang);
       setPlan(result);
       setLoginUrl(result.loginUrl);
       setWizardStep("plan");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatOllamaError(e));
     } finally {
       setAnalyzing(false);
     }

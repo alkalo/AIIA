@@ -15,6 +15,7 @@ import {
   getOpportunityDisplayMode,
 } from "@aiia/agent-engine/browser";
 import { OpportunityCard } from "../components/OpportunityCard";
+import { DesktopOllamaClient, prepareOllamaForPlanner } from "../ollama-desktop";
 
 export function Inbox() {
   const { t, i18n } = useTranslation();
@@ -137,10 +138,11 @@ export function Inbox() {
 
   const autoImproveAgent = async (result: ResultRecord) => {
     try {
-      if (!(await api.checkOllama())) return;
       const agent = agents.find((a) => a.id === result.agentId);
       if (!agent) return;
-      const planner = new PlannerAgent();
+      const hw = await api.getHardwareInfo();
+      await prepareOllamaForPlanner(hw.profile).catch(() => undefined);
+      const planner = new PlannerAgent(new DesktopOllamaClient(), hw.profile);
       const suggestions = await planner.suggestImprovements(agent.spec, {
         useful: [],
         notUseful: [JSON.stringify(result.data)],

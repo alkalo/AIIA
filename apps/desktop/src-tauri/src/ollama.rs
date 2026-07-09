@@ -92,6 +92,22 @@ pub fn recommended_model(total_ram_gb: u64) -> String {
     }
 }
 
+pub fn planner_model_for_profile(profile: &str) -> String {
+    match profile {
+        "super" | "high" => "qwen2.5:14b".to_string(),
+        "low" => "qwen2.5:3b".to_string(),
+        _ => "qwen2.5:7b".to_string(),
+    }
+}
+
+fn map_ollama_fetch_error(err: &reqwest::Error) -> String {
+    if err.is_connect() || err.is_timeout() {
+        "No se pudo conectar con Ollama. Ve a Ajustes, inicia Ollama o instálalo desde la app.".to_string()
+    } else {
+        format!("Error de comunicación con Ollama: {err}")
+    }
+}
+
 pub async fn ollama_is_running() -> bool {
     let client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(2))
@@ -167,6 +183,19 @@ fn start_ollama() -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("No se pudo iniciar ollama serve: {e}"))?;
         return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        if Command::new("ollama")
+            .arg("serve")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+        {
+            return Ok(());
+        }
     }
     Err("Ollama no está instalado".to_string())
 }
@@ -306,13 +335,84 @@ fn model_is_available(models: &[String], model: &str) -> bool {
         .any(|m| m == model || m.starts_with(&format!("{model}:")) || m.starts_with(model))
 }
 
+pub async fn ollama_chat(
+    model: String,
+    messages: Vec<serde_json::Value>,
+    temperature: Option<f64>,
+    num_ctx: Option<u32>,
+    format: Option<String>,
+) -> Result<String, String> {
+    if !ollama_is_running().await {
+        return Err(
+            "Ollama no está activo. Ve a Ajustes e inicia Ollama antes de continuar.".to_string(),
+        );
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(900))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": false,
+        "format": format,
+        "options": {
+            "temperature": temperature.unwrap_or(0.5),
+            "num_ctx": num_ctx.unwrap_or(4096),
+        }
+    });
+
+    let res = client
+        .post(format!("{OLLAMA_API}/api/chat"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| map_ollama_fetch_error(&e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(if text.is_empty() {
+            format!("Ollama rechazó la petición (HTTP {})", status.as_u16())
+        } else {
+            format!("Ollama rechazó la petición: {text}")
+        });
+    }
+
+    let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    data.get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Ollama devolvió una respuesta vacía".to_string())
+}
+
 pub async fn setup_ollama(
     app: AppHandle,
     data_dir: PathBuf,
     total_ram_gb: u64,
     pull_model_if_missing: bool,
 ) -> Result<OllamaStatus, String> {
-    let model = recommended_model(total_ram_gb);
+    setup_ollama_with_model(
+        app,
+        data_dir,
+        total_ram_gb,
+        &recommended_model(total_ram_gb),
+        pull_model_if_missing,
+    )
+    .await
+}
+
+pub async fn setup_ollama_with_model(
+    app: AppHandle,
+    data_dir: PathBuf,
+    total_ram_gb: u64,
+    model: &str,
+    pull_model_if_missing: bool,
+) -> Result<OllamaStatus, String> {
+    let model = model.to_string();
 
     if ollama_is_running().await {
         let models = list_models().await;
@@ -322,7 +422,7 @@ pub async fn setup_ollama(
                 installed: true,
                 running: true,
                 models,
-                recommended_model: model,
+                recommended_model: recommended_model(total_ram_gb),
             });
         }
         pull_model(&app, &model).await?;
@@ -332,7 +432,7 @@ pub async fn setup_ollama(
             installed: true,
             running: true,
             models,
-            recommended_model: model,
+            recommended_model: recommended_model(total_ram_gb),
         });
     }
 
@@ -361,6 +461,16 @@ pub async fn setup_ollama(
         installed: true,
         running: true,
         models,
-        recommended_model: model,
+        recommended_model: recommended_model(total_ram_gb),
     })
+}
+
+pub async fn ensure_ollama_for_planner(
+    app: AppHandle,
+    data_dir: PathBuf,
+    total_ram_gb: u64,
+    profile: &str,
+) -> Result<OllamaStatus, String> {
+    let model = planner_model_for_profile(profile);
+    setup_ollama_with_model(app, data_dir, total_ram_gb, &model, true).await
 }

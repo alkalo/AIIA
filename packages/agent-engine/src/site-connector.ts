@@ -1,4 +1,10 @@
-import { OllamaClient, modelForProfile } from "@aiia/ollama-client/browser";
+import { OllamaClient, modelForProfile, type ChatMessage, type ChatOptions } from "@aiia/ollama-client/browser";
+
+export interface OllamaChatClient {
+  listModels(): Promise<string[]>;
+  pullModel(model: string, onProgress?: (status: string) => void): Promise<void>;
+  chat(messages: ChatMessage[], options: ChatOptions): Promise<string>;
+}
 
 export interface SiteConnectionPlan {
   siteId: string;
@@ -22,11 +28,11 @@ Given a website or app name, return ONLY valid JSON:
 Use real official login URLs when known. authType is always "form" for username/password sites.`;
 
 export class SiteConnectorAgent {
-  private ollama: OllamaClient;
+  private ollama: OllamaChatClient;
   private model: string;
 
-  constructor(hwProfile = "medium") {
-    this.ollama = new OllamaClient();
+  constructor(hwProfile = "medium", ollama?: OllamaChatClient) {
+    this.ollama = ollama ?? new OllamaClient();
     this.model = modelForProfile(hwProfile, "planner");
   }
 

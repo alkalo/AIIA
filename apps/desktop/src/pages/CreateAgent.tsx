@@ -16,10 +16,15 @@ import {
   type PromptAttachment,
 } from "@aiia/agent-engine/browser";
 import { getEffortEstimate, EFFORT_LEVELS } from "@aiia/ollama-client/browser";
-import { api } from "../api";
+import { api, type OllamaSetupProgress } from "../api";
 import { ProgressBar } from "../components/ProgressBar";
 import { AgentSpecEditor } from "../components/AgentSpecEditor";
 import { useRunProgress } from "../hooks/useAgents";
+import {
+  DesktopOllamaClient,
+  formatOllamaError,
+  prepareOllamaForPlanner,
+} from "../ollama-desktop";
 
 export function CreateAgent() {
   const { t, i18n } = useTranslation();
@@ -37,6 +42,9 @@ export function CreateAgent() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [ollamaSetup, setOllamaSetup] = useState<{ message: string; percent: number } | null>(
+    null
+  );
 
   const [previewRunning, setPreviewRunning] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
@@ -146,15 +154,21 @@ export function CreateAgent() {
     if (!prompt.trim()) return;
     setLoading(true);
     setError("");
+    setOllamaSetup(null);
+    let unlisten: (() => void) | undefined;
     try {
-      const ollamaOk = await api.checkOllama().catch(() => false);
-      if (!ollamaOk) {
-        setError(t("create.ollamaRequired"));
-        return;
-      }
-
       const hw = await api.getHardwareInfo();
-      const planner = new PlannerAgent(undefined, hw.profile);
+      unlisten = await listen<OllamaSetupProgress>("ollama-setup-progress", (event) => {
+        setOllamaSetup({
+          message: event.payload.message,
+          percent: event.payload.percent,
+        });
+      });
+      setOllamaSetup({ message: t("create.ollamaPreparing"), percent: 0 });
+      await prepareOllamaForPlanner(hw.profile);
+
+      setOllamaSetup({ message: t("create.ollamaGenerating"), percent: 100 });
+      const planner = new PlannerAgent(new DesktopOllamaClient(), hw.profile);
       const lang = i18n.language.startsWith("es") ? "es" : "en";
       const generated = await planner.plan(prompt, templateId, lang, attachments);
       const normalized = normalizeAgentSpec({
@@ -164,8 +178,10 @@ export function CreateAgent() {
       });
       setSpec(normalized);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatOllamaError(e));
     } finally {
+      unlisten?.();
+      setOllamaSetup(null);
       setLoading(false);
     }
   };
@@ -324,6 +340,13 @@ export function CreateAgent() {
       </div>
 
       {error && <p className="error-text">{error}</p>}
+
+      {ollamaSetup && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <p>{ollamaSetup.message}</p>
+          <ProgressBar phase="setup" message={ollamaSetup.message} percent={ollamaSetup.percent} />
+        </div>
+      )}
 
       {showProgress && (
         <div className="card" style={{ marginBottom: "1rem" }}>

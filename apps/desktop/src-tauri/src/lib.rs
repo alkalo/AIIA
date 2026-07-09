@@ -161,6 +161,37 @@ async fn setup_ollama(
 }
 
 #[tauri::command]
+async fn ensure_ollama_for_planner(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    profile: String,
+) -> Result<ollama::OllamaStatus, String> {
+    let ram = sysinfo_mem_gb();
+    ollama::ensure_ollama_for_planner(app, state.data_dir.clone(), ram, &profile).await
+}
+
+#[tauri::command]
+async fn ensure_ollama_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<ollama::OllamaStatus, String> {
+    let ram = sysinfo_mem_gb();
+    ollama::setup_ollama_with_model(app, state.data_dir.clone(), ram, &model, true).await
+}
+
+#[tauri::command]
+async fn ollama_chat(
+    model: String,
+    messages: Vec<serde_json::Value>,
+    temperature: Option<f64>,
+    num_ctx: Option<u32>,
+    format: Option<String>,
+) -> Result<String, String> {
+    ollama::ollama_chat(model, messages, temperature, num_ctx, format).await
+}
+
+#[tauri::command]
 fn list_agents(state: State<AppState>) -> Result<Vec<AgentRecord>, String> {
     state.db.list_agents().map_err(|e| e.to_string())
 }
@@ -2021,6 +2052,9 @@ pub fn run() {
             check_ollama,
             get_ollama_status,
             setup_ollama,
+            ensure_ollama_for_planner,
+            ensure_ollama_model,
+            ollama_chat,
             list_agents,
             get_agent,
             save_agent,

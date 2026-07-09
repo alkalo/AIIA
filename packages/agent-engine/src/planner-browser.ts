@@ -12,11 +12,19 @@ import {
 import { buildContextBlock } from "./attachments.js";
 import { coerceJsonObject } from "./json-utils.js";
 
+import type { ChatMessage, ChatOptions } from "@aiia/ollama-client/browser";
+
+export interface OllamaChatClient {
+  listModels(): Promise<string[]>;
+  pullModel(model: string, onProgress?: (status: string) => void): Promise<void>;
+  chat(messages: ChatMessage[], options: ChatOptions): Promise<string>;
+}
+
 export class PlannerAgent {
-  private ollama: OllamaClient;
+  private ollama: OllamaChatClient;
   private plannerModel: string;
 
-  constructor(ollama?: OllamaClient, hwProfile = "medium") {
+  constructor(ollama?: OllamaChatClient, hwProfile = "medium") {
     this.ollama = ollama ?? new OllamaClient();
     this.plannerModel = modelForProfile(hwProfile, "planner");
   }

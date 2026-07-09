@@ -115,6 +115,10 @@ export const api = {
   getOllamaStatus: () => invoke<OllamaStatus>("get_ollama_status"),
   setupOllama: (pullModel = true) =>
     invoke<OllamaStatus>("setup_ollama", { pullModel }),
+  ensureOllamaForPlanner: (profile: string) =>
+    invoke<OllamaStatus>("ensure_ollama_for_planner", { profile }),
+  ensureOllamaModel: (model: string) =>
+    invoke<OllamaStatus>("ensure_ollama_model", { model }),
   listAgents: () => invoke<AgentRecord[]>("list_agents"),
   getAgent: (id: string) => invoke<AgentRecord>("get_agent", { id }),
   saveAgent: (spec: AgentSpec) => invoke<AgentRecord>("save_agent", { spec }),
