@@ -4,9 +4,6 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command as AsyncCommand;
-
 const OLLAMA_SETUP_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
 const OLLAMA_API: &str = "http://127.0.0.1:11434";
 
@@ -94,10 +91,64 @@ pub fn recommended_model(total_ram_gb: u64) -> String {
 
 pub fn planner_model_for_profile(profile: &str) -> String {
     match profile {
-        "super" | "high" => "qwen2.5:14b".to_string(),
+        "super" => "qwen2.5:14b".to_string(),
         "low" => "qwen2.5:3b".to_string(),
+        "high" | "medium" => "qwen2.5:7b".to_string(),
         _ => "qwen2.5:7b".to_string(),
     }
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+        } else if c == '\r' {
+            continue;
+        } else {
+            out.push(c);
+        }
+    }
+    out.trim().to_string()
+}
+
+fn format_pull_progress(
+    model: &str,
+    status: &str,
+    completed: Option<u64>,
+    total: Option<u64>,
+) -> (u32, String) {
+    let pct = match (completed, total) {
+        (Some(c), Some(t)) if t > 0 => ((c * 100) / t) as u32,
+        _ => 0,
+    };
+    let message = match (completed, total) {
+        (Some(c), Some(t)) if t > 0 => {
+            let gb = |n: u64| n as f64 / 1_000_000_000.0;
+            format!(
+                "Descargando {model}… {pct}% ({:.1}/{:.1} GB)",
+                gb(c),
+                gb(t)
+            )
+        }
+        _ => {
+            let clean = strip_ansi(status);
+            if clean.is_empty() {
+                format!("Descargando {model}…")
+            } else if clean.len() > 120 {
+                format!("Descargando {model}… {}", &clean[..120])
+            } else {
+                format!("Descargando {model}… {clean}")
+            }
+        }
+    };
+    (pct, message)
 }
 
 fn map_ollama_fetch_error(err: &reqwest::Error) -> String {
@@ -279,50 +330,56 @@ async fn pull_model(app: &AppHandle, model: &str) -> Result<(), String> {
         app,
         "pulling",
         0,
-        &format!("Descargando modelo {model}…"),
+        &format!("Descargando {model}…"),
     );
 
-    let exe = ollama_exe_path().ok_or_else(|| "Ollama no está instalado".to_string())?;
-    let mut child = AsyncCommand::new(&exe)
-        .args(["pull", model])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("No se pudo ejecutar ollama pull: {e}"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3600))
+        .build()
+        .map_err(|e| e.to_string())?;
 
-    if let Some(stderr) = child.stderr.take() {
-        let mut reader = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
+    let response = client
+        .post(format!("{OLLAMA_API}/api/pull"))
+        .json(&serde_json::json!({ "name": model, "stream": true }))
+        .send()
+        .await
+        .map_err(|e| map_ollama_fetch_error(&e))?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        return Err(if text.is_empty() {
+            format!("No se pudo descargar el modelo (HTTP {status})")
+        } else {
+            format!("No se pudo descargar el modelo: {text}")
+        });
+    }
+
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buffer = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| map_ollama_fetch_error(&e))?;
+        buffer.extend_from_slice(&chunk);
+        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line_bytes);
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(status) = parsed.get("status").and_then(|s| s.as_str()) {
-                    let pct = parsed
-                        .get("completed")
-                        .and_then(|c| c.as_u64())
-                        .zip(parsed.get("total").and_then(|t| t.as_u64()))
-                        .map(|(c, t)| if t > 0 { ((c * 100) / t) as u32 } else { 0 })
-                        .unwrap_or(0);
-                    emit_progress(app, "pulling", pct, status);
-                }
-            } else {
-                emit_progress(app, "pulling", 0, line);
+                let status = parsed
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let completed = parsed.get("completed").and_then(|c| c.as_u64());
+                let total = parsed.get("total").and_then(|t| t.as_u64());
+                let (pct, message) = format_pull_progress(model, status, completed, total);
+                emit_progress(app, "pulling", pct, &message);
             }
         }
-    }
-
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("ollama pull falló: {e}"))?;
-
-    if !status.success() {
-        return Err(format!(
-            "ollama pull terminó con código {}",
-            status.code().unwrap_or(-1)
-        ));
     }
 
     emit_progress(app, "pulling", 100, &format!("Modelo {model} listo"));
@@ -471,6 +528,24 @@ pub async fn ensure_ollama_for_planner(
     total_ram_gb: u64,
     profile: &str,
 ) -> Result<OllamaStatus, String> {
-    let model = planner_model_for_profile(profile);
+    let by_profile = planner_model_for_profile(profile);
+    let by_ram = recommended_model(total_ram_gb);
+    let model = if model_size_rank(&by_ram) < model_size_rank(&by_profile) {
+        by_ram
+    } else {
+        by_profile
+    };
     setup_ollama_with_model(app, data_dir, total_ram_gb, &model, true).await
+}
+
+fn model_size_rank(model: &str) -> u8 {
+    if model.contains("14b") {
+        3
+    } else if model.contains("7b") {
+        2
+    } else if model.contains("3b") {
+        1
+    } else {
+        0
+    }
 }

@@ -24,6 +24,7 @@ import {
   DesktopOllamaClient,
   formatOllamaError,
   prepareOllamaForPlanner,
+  sanitizeOllamaProgressMessage,
 } from "../ollama-desktop";
 
 export function CreateAgent() {
@@ -160,7 +161,7 @@ export function CreateAgent() {
       const hw = await api.getHardwareInfo();
       unlisten = await listen<OllamaSetupProgress>("ollama-setup-progress", (event) => {
         setOllamaSetup({
-          message: event.payload.message,
+          message: sanitizeOllamaProgressMessage(event.payload.message),
           percent: event.payload.percent,
         });
       });

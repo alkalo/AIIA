@@ -33,6 +33,15 @@ export class DesktopOllamaClient {
   }
 }
 
+export function sanitizeOllamaProgressMessage(message: string): string {
+  return message
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
+    .replace(/\x1b\].*?\x07/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function formatOllamaError(err: unknown): string {
   const raw =
     err instanceof Error ? err.message : typeof err === "string" ? err : String(err);

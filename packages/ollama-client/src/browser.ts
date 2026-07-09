@@ -209,7 +209,7 @@ export type {
 export function modelForProfile(profile: string, role: "planner" | "extractor"): string {
   const map: Record<string, [string, string]> = {
     super: ["qwen2.5:14b", "qwen2.5:7b"],
-    high: ["qwen2.5:14b", "qwen2.5:7b"],
+    high: ["qwen2.5:7b", "qwen2.5:3b"],
     medium: ["qwen2.5:7b", "qwen2.5:3b"],
     low: ["qwen2.5:3b", "llama3.2:1b"],
   };
