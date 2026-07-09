@@ -10,7 +10,22 @@ export {
   formatResultTitle,
   formatResultLocation,
   resolvePostingUrl,
+  resolveOpportunityUrl,
   postingLinkLabel,
   postingHost,
   sanitizeFieldValue,
+  formatOpportunityHeadline,
+  formatOpportunityProgram,
+  formatOpportunityScope,
+  formatOpportunityFunding,
+  formatOpportunityDeadline,
+  formatOpportunityMeta,
+  getOpportunityDisplayMode,
 } from "./result-quality.js";
+export { isClosingSoon } from "./deadline.js";
+export {
+  resolveOpportunitySubtype,
+  isGrantTarget,
+  isJobTarget,
+  isOpportunityCardView,
+} from "./opportunity-subtype.js";

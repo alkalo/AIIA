@@ -37,3 +37,18 @@ npm run build:packages     # compilar packages TS
 - Leer `docs/effort-levels.md` para params Ollama
 - No añadir APIs de pago ni Google
 - Mantener todo en local
+
+## Oportunidades y subvenciones (grants)
+
+La plantilla `opportunities` admite subtipos vía `opportunitySubtype`:
+
+| Subtipo | Vista bandeja | Schema típico |
+|---------|---------------|---------------|
+| `jobs` | Tabla (empresa, ubicación, etc.) | `title`, `company`, `location`, `url`, … |
+| `grants` | Tarjetas tipo boletín | `scope`, `organization`, `program_name`, `description`, `max_funding`, `currency`, `deadline`, `url` |
+| `tenders`, `events` | Tarjetas | Similar a grants según prompt |
+
+- Si `opportunitySubtype` no está en el spec, se infiere del prompt (keywords: grant, subvención, convocatoria, funding, beca, tender, licitación).
+- Fuentes de búsqueda: `duckduckgo` (siempre), `url` (página estática), `rss` (feed Atom/RSS).
+- Dedupe por defecto: grants → `organization` + `program_name`; jobs → `title` + `url`.
+- Ejemplo de prompt grants: *"Grants para comunidades rurales, wellbeing y proyectos locales (Australia y global). Campos: scope, organization, program_name, description, max_funding, currency, deadline, url."*

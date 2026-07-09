@@ -1,4 +1,9 @@
-import type { TemplateId } from "./types.js";
+import type { AgentSpec, TemplateId } from "./types.js";
+import {
+  defaultDedupeFields,
+  defaultOutputSchema,
+  resolveOpportunitySubtype,
+} from "./opportunity-subtype.js";
 
 export interface AgentTemplate {
   id: TemplateId;
@@ -135,9 +140,39 @@ export function buildPlannerUserMessage(
   const template = getTemplate(canonical);
   const guidance = lang === "es" ? template.intentGuidance.es : template.intentGuidance.en;
 
+  const draftSpec = {
+    prompt: userPrompt,
+    templateId: canonical,
+    filters: { criteria: userPrompt },
+    search: { queries: [] },
+  } as unknown as AgentSpec;
+  const subtype = resolveOpportunitySubtype(draftSpec);
+  const grantHints =
+    subtype === "grants"
+      ? lang === "es"
+        ? `
+Grant/funding hints:
+- opportunitySubtype: grants
+- output.schema: scope, organization, program_name, description, max_funding, currency, deadline, url, score, reason
+- scope values like NATIONAL, GLOBAL, AU & NZ, EU, ES — infer from user geography
+- queries: use site: on official grant portals and aggregators; NEVER use LinkedIn/Indeed job boards
+- maxSources: 30–50 for grant discovery
+- dedupe fields: organization, program_name`
+        : `
+Grant/funding hints:
+- opportunitySubtype: grants
+- output.schema: scope, organization, program_name, description, max_funding, currency, deadline, url, score, reason
+- scope values like NATIONAL, GLOBAL, AU & NZ, EU, ES — infer from user geography
+- queries: use site: on official grant portals and aggregators; NEVER use LinkedIn/Indeed job boards
+- maxSources: 30–50 for grant discovery
+- dedupe fields: organization, program_name`
+      : "";
+
   return `Intent category: ${canonical}
+Inferred opportunity subtype: ${subtype}
 Planner hints (soft guidance — adapt fully to the user, do not copy literally):
 ${guidance}
+${grantHints}
 
 Rules:
 - Derive search queries, output schema, filters, and schedule from the user description.
@@ -150,11 +185,17 @@ User description:
 ${userPrompt}${attachmentBlock}`;
 }
 
-export function fallbackSchema(_prompt: string): string[] {
-  return ["title", "summary", "source", "url", "score", "reason"];
+export function fallbackSchema(prompt: string, templateId?: TemplateId): string[] {
+  const draft = {
+    prompt,
+    templateId: templateId ?? "custom",
+    filters: { criteria: prompt },
+    search: { queries: [] },
+  } as unknown as AgentSpec;
+  return defaultOutputSchema(draft);
 }
 
-export function fallbackQueries(prompt: string): string[] {
+export function fallbackQueries(prompt: string, templateId?: TemplateId): string[] {
   const trimmed = prompt.trim();
   if (!trimmed) return ["search"];
   const tokens = trimmed
@@ -163,16 +204,42 @@ export function fallbackQueries(prompt: string): string[] {
     .filter((w) => w.length > 2);
   const core = tokens.slice(0, 8).join(" ");
   const out = new Set<string>([trimmed.slice(0, 120), core]);
-  if (core) {
-    out.add(`${core} empleo OR jobs`);
-    out.add(`site:linkedin.com ${core}`);
-    out.add(`site:indeed.com ${core}`);
+
+  const draft = {
+    prompt: trimmed,
+    templateId: templateId ?? "custom",
+    filters: { criteria: trimmed },
+    search: { queries: [] },
+  } as unknown as AgentSpec;
+  const subtype = resolveOpportunitySubtype(draft);
+
+  if (subtype === "grants") {
+    if (core) {
+      out.add(`${core} grant application deadline`);
+      out.add(`${core} convocatoria abierta`);
+      out.add(`site:fundsforngos.org ${core}`);
+      out.add(`site:ec.europa.eu ${core} funding`);
+    }
+  } else if (subtype === "jobs") {
+    if (core) {
+      out.add(`${core} empleo OR jobs`);
+      out.add(`site:linkedin.com ${core}`);
+      out.add(`site:indeed.com ${core}`);
+    }
   }
+
   return [...out].filter((q) => q.length > 3).slice(0, 6);
 }
 
-export function fallbackDedupeFields(schema: string[]): string[] {
-  const prefer = ["url", "title", "name", "id"];
+export function fallbackDedupeFields(schema: string[], templateId?: TemplateId, prompt?: string): string[] {
+  const draft = {
+    prompt: prompt ?? "",
+    templateId: templateId ?? "custom",
+    filters: { criteria: prompt ?? "" },
+    search: { queries: [] },
+  } as unknown as AgentSpec;
+  const defaults = defaultDedupeFields(draft);
+  const prefer = [...defaults, "url", "title", "name", "id"];
   const picked = prefer.filter((f) => schema.includes(f));
-  return picked.length > 0 ? picked : ["title", "url"];
+  return picked.length > 0 ? picked : defaults;
 }

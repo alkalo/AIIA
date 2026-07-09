@@ -45,6 +45,8 @@ pub struct AgentSpec {
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "template_id")]
     pub template_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "opportunity_subtype")]
+    pub opportunity_subtype: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "context_attachments")]
     pub context_attachments: Option<Vec<PromptAttachment>>,
     pub search: SearchConfig,
@@ -86,6 +88,7 @@ pub struct SearchConfig {
 pub enum SearchSource {
     Duckduckgo,
     Url { url: String },
+    Rss { url: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -11,7 +11,12 @@
     "prompt": { "type": "string", "minLength": 1 },
     "templateId": {
       "type": "string",
-      "enum": ["job-search", "candidate-search", "supplier-search", "custom"]
+      "enum": ["job-search", "candidate-search", "supplier-search", "opportunities", "custom"]
+    },
+    "opportunitySubtype": {
+      "type": "string",
+      "enum": ["jobs", "grants", "tenders", "events", "deals", "custom"],
+      "description": "Subtipo para plantilla opportunities: empleo, subvenciones, licitaciones, etc."
     },
     "search": {
       "type": "object",
@@ -23,7 +28,8 @@
           "items": {
             "oneOf": [
               { "type": "object", "properties": { "type": { "const": "duckduckgo" } }, "required": ["type"] },
-              { "type": "object", "properties": { "type": { "const": "url" }, "url": { "type": "string", "format": "uri" } }, "required": ["type", "url"] }
+              { "type": "object", "properties": { "type": { "const": "url" }, "url": { "type": "string", "format": "uri" } }, "required": ["type", "url"] },
+              { "type": "object", "properties": { "type": { "const": "rss" }, "url": { "type": "string", "format": "uri" } }, "required": ["type", "url"] }
             ]
           }
         },

@@ -1,5 +1,6 @@
 import type { AgentSpec, ExtractedItem } from "./types.js";
 import type { EffortConfig, EffortLevel } from "@aiia/ollama-client";
+import { isGrantTarget, isJobTarget } from "./opportunity-subtype.js";
 
 export interface SearchHit {
   title: string;
@@ -82,18 +83,41 @@ const JOB_POSTING_PATTERNS = [
   /tecnoempleo\.com/i,
 ];
 
+const GRANT_DOMAIN_PATTERNS = [
+  /fundsforngos/i,
+  /grantwatch/i,
+  /devex\.com/i,
+  /funding-tenders/i,
+  /ec\.europa\.eu/i,
+  /cordis\.europa/i,
+  /sede\.administracion/i,
+  /boe\.es/i,
+  /business\.gov\.au/i,
+  /philanthropy\.org\.au/i,
+  /communitygrant/i,
+  /subvenc/i,
+  /convocatoria/i,
+  /grant/i,
+  /foundation/i,
+  /fundaci[oó]n/i,
+];
+
+const JOB_BOARD_PATTERNS = [
+  /linkedin\.com\/jobs/i,
+  /indeed\.com/i,
+  /glassdoor\.com/i,
+  /infojobs\.net/i,
+  /computrabajo\.com/i,
+  /tecnoempleo\.com/i,
+];
+
 const JOB_KEYWORDS = [
   "empleo", "vacante", "oferta", "puesto", "contrat", "hiring", "job", "vacancy",
   "position", "career", "trabajo", "salario", "salary", "apply", "aplicar",
 ];
 
 /** ¿El objetivo del agente son ofertas de empleo? */
-export function isJobTarget(spec: AgentSpec): boolean {
-  const tpl = (spec.templateId ?? "").toLowerCase();
-  if (tpl.includes("job") || tpl === "opportunities") return true;
-  const blob = `${spec.prompt} ${spec.filters.criteria} ${spec.search.queries.join(" ")}`.toLowerCase();
-  return JOB_KEYWORDS.some((k) => blob.includes(k));
-}
+export { isJobTarget } from "./opportunity-subtype.js";
 
 /**
  * Ajuste de puntuación para objetivos de empleo: penaliza fichas de
@@ -113,6 +137,26 @@ export function jobTargetAdjustment(url: string, contentBlob: string, spec: Agen
     adj += 20;
   }
   return adj;
+}
+
+/** Ajuste de puntuación para convocatorias y subvenciones. */
+export function grantTargetAdjustment(url: string, contentBlob: string, spec: AgentSpec): number {
+  if (!isGrantTarget(spec)) return 0;
+  let adj = 0;
+  const hay = contentBlob.toLowerCase();
+  if (GRANT_DOMAIN_PATTERNS.some((p) => p.test(url) || p.test(hay))) adj += 25;
+  if (/\.gov(\.|\/|$)/i.test(url) || /\.gob\.es/i.test(url)) adj += 20;
+  if (JOB_BOARD_PATTERNS.some((p) => p.test(url))) adj -= 30;
+  if (/\b(deadline|closing|convocatoria|grant|funding|subvenci)/i.test(hay)) adj += 10;
+  return adj;
+}
+
+export function opportunityTargetAdjustment(
+  url: string,
+  contentBlob: string,
+  spec: AgentSpec
+): number {
+  return jobTargetAdjustment(url, contentBlob, spec) + grantTargetAdjustment(url, contentBlob, spec);
 }
 
 const STOP_WORDS = new Set([
@@ -151,7 +195,7 @@ export function rankSearchResults(
   const scored = results.map((r) => {
     const blob = `${r.title} ${r.snippet} ${r.url}`;
     let score = 50 + domainQualityScore(r.url) + keywordOverlapScore(blob, spec);
-    score += jobTargetAdjustment(r.url, blob, spec);
+    score += opportunityTargetAdjustment(r.url, blob, spec);
     if (r.title.length > 10) score += 5;
     if (r.snippet.length > 40) score += 5;
     return { result: r, score };
@@ -168,14 +212,14 @@ export function heuristicItemScore(
 ): number {
   const blob = `${item.title ?? ""} ${item.description ?? ""} ${source.title} ${source.snippet} ${source.url}`;
   let score = 55 + keywordOverlapScore(blob, spec) + domainQualityScore(source.url);
-  score += jobTargetAdjustment(String(item.url ?? source.url), blob, spec);
+  score += opportunityTargetAdjustment(String(item.url ?? source.url), blob, spec);
   if (item.url) score += 5;
   if (item.title && String(item.title).length > 3) score += 5;
   return Math.min(92, Math.max(25, score));
 }
 
 /** Consultas más amplias si la búsqueda inicial no devuelve nada */
-export function broadenQueries(queries: string[], prompt: string): string[] {
+export function broadenQueries(queries: string[], prompt: string, spec?: AgentSpec): string[] {
   const out = new Set<string>();
   for (const q of queries) {
     out.add(q.trim());
@@ -187,12 +231,19 @@ export function broadenQueries(queries: string[], prompt: string): string[] {
   const promptWords = tokenize(prompt).join(" ");
   if (promptWords) {
     out.add(promptWords);
-    out.add(`${promptWords} empleo OR jobs`);
-    const short = tokenize(prompt).slice(0, 6).join(" ");
-    if (short) {
-      out.add(`site:linkedin.com/jobs ${short}`);
-      out.add(`site:indeed.com ${short}`);
-      out.add(`site:infojobs.net ${short}`);
+    if (spec && isGrantTarget(spec)) {
+      out.add(`${promptWords} grant application deadline`);
+      out.add(`${promptWords} convocatoria abierta`);
+      out.add(`site:fundsforngos.org ${promptWords}`);
+      out.add(`site:ec.europa.eu ${promptWords} funding`);
+    } else if (!spec || isJobTarget(spec)) {
+      out.add(`${promptWords} empleo OR jobs`);
+      const short = tokenize(prompt).slice(0, 6).join(" ");
+      if (short) {
+        out.add(`site:linkedin.com/jobs ${short}`);
+        out.add(`site:indeed.com ${short}`);
+        out.add(`site:infojobs.net ${short}`);
+      }
     }
   }
   return [...out].filter(Boolean).slice(0, 8);

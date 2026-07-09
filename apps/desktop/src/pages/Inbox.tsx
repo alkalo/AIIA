@@ -12,7 +12,9 @@ import {
   postingLinkLabel,
   postingHost,
   sanitizeFieldValue,
+  getOpportunityDisplayMode,
 } from "@aiia/agent-engine/browser";
+import { OpportunityCard } from "../components/OpportunityCard";
 
 export function Inbox() {
   const { t, i18n } = useTranslation();
@@ -152,6 +154,11 @@ export function Inbox() {
     }
   };
 
+  const selectedAgent = agents.find((a) => a.id === filterAgent);
+  const cardView = selectedAgent
+    ? getOpportunityDisplayMode(selectedAgent.spec) === "card"
+    : false;
+
   if (loading) return <p>{t("common.loading")}</p>;
 
   return (
@@ -214,6 +221,24 @@ export function Inbox() {
 
       {visibleResults.length === 0 ? (
         <p>{t("inbox.noResults")}</p>
+      ) : cardView ? (
+        <div className="opportunity-card-list">
+          {visibleResults.map((r) => {
+            const agent = agents.find((a) => a.id === r.agentId);
+            return (
+              <OpportunityCard
+                key={r.id}
+                result={r}
+                agentName={agent?.spec.name}
+                lang={lang}
+                deleting={deleting === r.id}
+                onOpenUrl={(url) => api.openUrl(url)}
+                onFeedback={(feedback) => handleFeedback(r.id, feedback)}
+                onDelete={() => handleDelete(r.id)}
+              />
+            );
+          })}
+        </div>
       ) : (
         <div className="results-table-wrap">
           <table className="results-table inbox-table">

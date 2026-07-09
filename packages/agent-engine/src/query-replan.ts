@@ -1,6 +1,7 @@
 import type { EffortLevel } from "@aiia/ollama-client";
 import type { OllamaClient } from "@aiia/ollama-client";
 import type { AgentSpec, TemplateId } from "./types.js";
+import { isGrantTarget, isJobTarget, resolveOpportunitySubtype } from "./opportunity-subtype.js";
 import { resolveTemplateId } from "./templates.js";
 import { coerceJsonArray } from "./json-utils.js";
 
@@ -76,7 +77,17 @@ export function buildQueriesFromPrompt(spec: AgentSpec): string[] {
   if (core) out.add(core);
   if (core) out.add(es ? `${core} ofertas` : `${core} opportunities`);
 
-  if (canonical === "opportunities" || spec.templateId === "job-search") {
+  const subtype = resolveOpportunitySubtype(spec);
+
+  if (subtype === "grants") {
+    out.add(es ? `${core} convocatoria abierta` : `${core} grant application deadline`);
+    out.add(`site:fundsforngos.org ${core}`);
+    out.add(`site:ec.europa.eu ${core} funding`);
+    if (/australia|au\b|nz\b/i.test(prompt)) {
+      out.add(`site:business.gov.au ${core} grant`);
+      out.add(`site:philanthropy.org.au ${core}`);
+    }
+  } else if (subtype === "jobs" || spec.templateId === "job-search") {
     out.add(es ? `${core} empleo remoto` : `${core} remote jobs`);
     out.add(`site:linkedin.com/jobs ${core}`);
     out.add(`site:indeed.com ${core}`);

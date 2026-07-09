@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   fetchPageContent,
+  fetchFeed,
+  fetchUrlAsSnippet,
   searchWeb,
   enginesForEffort,
   type ScraperOptions,
@@ -42,8 +44,11 @@ import {
   type ActionLogger,
 } from "./run-logger.js";
 import { coerceJsonArray, coerceJsonObject } from "./json-utils.js";
-import { normalizeExtractedItem, validateJobResult } from "./result-quality.js";
+import { normalizeExtractedItem, validateOpportunityResult } from "./result-quality.js";
 import { sectorExpansionQueries } from "./sector-sources.js";
+import { grantExpansionQueries } from "./grant-sources.js";
+import { isGrantTarget } from "./opportunity-subtype.js";
+import { sortByDeadlineAsc } from "./deadline.js";
 
 export type ProgressCallback = (event: ProgressEvent) => void;
 
@@ -183,6 +188,19 @@ export class Executor {
     let plan: SearchPlan = await buildSearchPlan(spec, profile, this.ollama, this.plannerModel, cfg.numCtx);
     let queries = queriesFromPlan(plan);
 
+    const seedSources = await this.collectSeedSources(spec, log);
+    let rankedSources: RankedSource[] = seedSources.length
+      ? await rankSources(
+          dedupeHits(seedSources),
+          spec,
+          profile,
+          maxSources,
+          this.ollama,
+          this.plannerModel,
+          cfg.numCtx
+        )
+      : [];
+
     log(
       LogAction.LLM_PLAN,
       profile.llmPlan ? "Plan de búsqueda generado por IA" : "Plan heurístico (modo rápido)",
@@ -218,7 +236,6 @@ export class Executor {
 
     progress("planning", 8, `${queries.length} consultas · ${plan.sourceTypes.slice(0, 3).join(", ") || "web"}`);
 
-    let rankedSources: RankedSource[] = [];
     let wave = 0;
     const usedQueries = new Set<string>();
     let pendingNewQueries: string[] = [];
@@ -245,7 +262,10 @@ export class Executor {
           (q) => !usedQueries.has(q.trim().toLowerCase())
         );
         const need = Math.max(0, perWaveTarget - fromCoverage.length);
-        const sector = sectorExpansionQueries(spec, usedQueries, need);
+        const sector = [
+          ...sectorExpansionQueries(spec, usedQueries, need),
+          ...grantExpansionQueries(spec, usedQueries, need),
+        ];
         waveQueries = [...new Set([...fromCoverage, ...sector])];
         pendingNewQueries = [];
       }
@@ -290,7 +310,7 @@ export class Executor {
 
       if (raw.length === 0 && wave === 0) {
         progress("searching", 12, "0 fuentes — reintentando consultas ampliadas…");
-        const broader = broadenQueries(queries, spec.prompt);
+        const broader = broadenQueries(queries, spec.prompt, spec);
         registerUsed(broader);
         log(LogAction.WEB_SEARCH, "Reintento con consultas ampliadas", formatBulletList(broader), "searching");
         const retry = await this.collectSourcesParallel(
@@ -441,7 +461,7 @@ export class Executor {
 
       extracted = await mapPool(toExtract, profile.parallelExtract, async (result, i) => {
         const content = result.rawHtml ?? result.snippet;
-        let item = await this.extractItem(content, result, spec.output.schema, cfg);
+        let item = await this.extractItem(content, result, spec, cfg);
         if (!item.title && !item.url) {
           item = serpToExtractedItems([result], spec)[0] ?? item;
         } else if (!item.score) {
@@ -474,7 +494,7 @@ export class Executor {
       });
     }
 
-    extracted = extracted.filter((item) => validateJobResult(item, spec));
+    extracted = extracted.filter((item) => validateOpportunityResult(item, spec));
     if (extracted.length === 0) {
       progress("filtering", 72, "Sin resultados válidos tras validación");
     }
@@ -507,13 +527,13 @@ export class Executor {
     const minScore = effectiveMinScore(effort, spec.filters.minScore ?? 70);
     let finalItems = filtered
       .map((item) => normalizeExtractedItem(item))
-      .filter((item) => validateJobResult(item, spec))
+      .filter((item) => validateOpportunityResult(item, spec))
       .filter((item) => (item.score ?? 0) >= minScore);
 
     if (finalItems.length === 0 && extracted.length > 0) {
       finalItems = serpToExtractedItems(rankedSources, spec)
         .map((item) => normalizeExtractedItem(item))
-        .filter((item) => validateJobResult(item, spec))
+        .filter((item) => validateOpportunityResult(item, spec))
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
         .slice(0, Math.max(3, Math.ceil(rankedSources.length * 0.5)));
       progress("filtering", 78, `Fallback SERP — ${finalItems.length} enlaces`);
@@ -539,6 +559,9 @@ export class Executor {
     }
 
     finalItems.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    if (isGrantTarget(spec)) {
+      finalItems = sortByDeadlineAsc(finalItems);
+    }
 
     log(
       LogAction.FILTER,
@@ -789,25 +812,84 @@ export class Executor {
     return [];
   }
 
+  private async collectSeedSources(
+    spec: AgentSpec,
+    log: ActionLogger
+  ): Promise<SearchResult[]> {
+    const seeds: SearchResult[] = [];
+    for (const source of spec.search.sources) {
+      if (source.type === "rss") {
+        try {
+          const items = await fetchFeed(source.url, 40);
+          for (const item of items) {
+            seeds.push({
+              title: item.title,
+              url: item.url,
+              snippet: item.snippet || item.publishedAt || "",
+            });
+          }
+          log(LogAction.WEB_SEARCH, `Feed RSS: ${source.url}`, `${items.length} entradas`, "searching");
+        } catch (err) {
+          log(
+            LogAction.WEB_SEARCH,
+            `Feed RSS falló: ${source.url}`,
+            err instanceof Error ? err.message : String(err),
+            "searching"
+          );
+        }
+      } else if (source.type === "url") {
+        try {
+          const item = await fetchUrlAsSnippet(source.url);
+          seeds.push({ title: item.title, url: item.url, snippet: item.snippet });
+          log(LogAction.WEB_SEARCH, `Fuente URL semilla: ${source.url}`, truncate(item.title, 80), "searching");
+        } catch (err) {
+          log(
+            LogAction.WEB_SEARCH,
+            `Fuente URL falló: ${source.url}`,
+            err instanceof Error ? err.message : String(err),
+            "searching"
+          );
+        }
+      }
+    }
+    return seeds;
+  }
+
   private async extractItem(
     content: string,
     result: SearchResult,
-    schema: string[],
+    spec: AgentSpec,
     cfg: EffortConfig
   ): Promise<ExtractedItem> {
+    const schema = spec.output.schema;
     const truncated = content.slice(0, cfg.extractContentChars);
-    try {
-      const response = await this.ollama.chat(
-        [
-          {
-            role: "system",
-            content: `Extract relevant fields from this job posting page. Return JSON: ${schema.join(", ")}.
+    const grant = isGrantTarget(spec);
+    const systemPrompt = grant
+      ? `Extract grant/funding opportunity fields from this page. Return JSON: ${schema.join(", ")}.
+Rules:
+- scope: geographic scope like NATIONAL, GLOBAL, AU & NZ, EU, ES — infer from content
+- organization: funding body or company offering the grant
+- program_name: official program or grant name
+- description: 1-3 sentence summary of who it supports and what it funds
+- max_funding: maximum amount as written (e.g. Up to $15,000)
+- currency: ISO or symbol if clear (USD, AUD, EUR)
+- deadline: closing date as written (e.g. Closing 30 July)
+- url: direct link to apply or official call page
+- If not a grant/funding opportunity, set score below 40
+Source URL: ${result.url}`
+      : `Extract relevant fields from this job posting page. Return JSON: ${schema.join(", ")}.
 Rules:
 - application_link MUST be the direct URL to view or apply to THIS specific job (not company homepage, search results, or reviews).
 - job_title: single role title only (not a list of roles).
 - location: city/region only (not "Select location" placeholders).
 - If the page is not a job posting (reviews, company profile, article), set score below 40.
-Source URL: ${result.url}`,
+Source URL: ${result.url}`;
+    try {
+      const response = await this.ollama.chat(
+        [
+          {
+            role: "system",
+            content: systemPrompt,
           },
           {
             role: "user",

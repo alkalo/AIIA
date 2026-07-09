@@ -1,5 +1,6 @@
 import type { AgentSpec, ExtractedItem } from "./types.js";
-import { isJobTarget } from "./search-quality.js";
+import { isJobTarget, isGrantTarget, isOpportunityCardView } from "./opportunity-subtype.js";
+import { isExpiredDeadline } from "./deadline.js";
 
 const JOB_POSTING_URL_PATTERNS = [
   /\/jobs?\//i,
@@ -67,7 +68,27 @@ export function isLowQualityJobUrl(url: string): boolean {
   return LOW_QUALITY_JOB_URL_PATTERNS.some((p) => p.test(url));
 }
 
-/** URL preferida: enlace directo al anuncio, no a la página de búsqueda o empresa. */
+/** URL preferida para oportunidades (grants, tenders, jobs). */
+export function resolveOpportunityUrl(data: Record<string, unknown>): string {
+  const candidates = [
+    data.application_url,
+    data.applicationUrl,
+    data.call_url,
+    data.callUrl,
+    data.application_link,
+    data.applicationLink,
+    data.job_url,
+    data.jobUrl,
+    data.url,
+    data.link,
+    data.source,
+  ];
+  return candidates
+    .map((c) => (c ? String(c).trim() : ""))
+    .find((s) => /^https?:\/\//i.test(s)) ?? "";
+}
+
+/** URL preferida para ofertas de empleo. */
 export function resolvePostingUrl(data: Record<string, unknown>): string {
   const candidates = [
     data.application_link,
@@ -88,7 +109,7 @@ export function resolvePostingUrl(data: Record<string, unknown>): string {
   const notLow = valid.find((u) => !isLowQualityJobUrl(u));
   if (notLow) return notLow;
 
-  return valid[0] ?? "";
+  return valid[0] ?? resolveOpportunityUrl(data);
 }
 
 export function isGarbageExtraction(item: ExtractedItem): boolean {
@@ -147,6 +168,28 @@ function isDefinitelyNonJobUrl(url: string): boolean {
   return DEFINITELY_NOT_JOB.some((p) => p.test(url));
 }
 
+export function validateOpportunityResult(item: ExtractedItem, spec: AgentSpec): boolean {
+  if (isGarbageExtraction(item)) return false;
+
+  if (isGrantTarget(spec)) {
+    const normalized = normalizeExtractedItem(item);
+    const org = sanitizeFieldValue(
+      normalized.organization ?? normalized.organisation ?? normalized.funder
+    );
+    const program = sanitizeFieldValue(
+      normalized.program_name ?? normalized.programName ?? normalized.title ?? normalized.name
+    );
+    const url = resolveOpportunityUrl(normalized as Record<string, unknown>);
+    if (!program && !org) return false;
+    if (!url && !program) return false;
+    if (isExpiredDeadline(normalized.deadline ?? normalized.closing_date)) return false;
+    return true;
+  }
+
+  return validateJobResult(item, spec);
+}
+
+/** @deprecated use validateOpportunityResult */
 export function validateJobResult(item: ExtractedItem, spec: AgentSpec): boolean {
   if (isGarbageExtraction(item)) return false;
   if (!isJobTarget(spec)) return true;
@@ -163,6 +206,51 @@ export function validateJobResult(item: ExtractedItem, spec: AgentSpec): boolean
   if (!title || title.length < 3) return false;
 
   return true;
+}
+
+export function getOpportunityDisplayMode(spec: AgentSpec): "card" | "table" {
+  return isOpportunityCardView(spec) ? "card" : "table";
+}
+
+export function formatOpportunityHeadline(data: Record<string, unknown>): string {
+  const org = sanitizeFieldValue(data.organization ?? data.organisation ?? data.funder, 80);
+  const program = sanitizeFieldValue(
+    data.program_name ?? data.programName ?? data.title ?? data.name,
+    80
+  );
+  if (org && program && !program.toLowerCase().includes(org.toLowerCase())) return org;
+  return org || program || formatResultTitle(data);
+}
+
+export function formatOpportunityProgram(data: Record<string, unknown>): string {
+  return sanitizeFieldValue(
+    data.program_name ?? data.programName ?? data.title ?? data.name,
+    120
+  );
+}
+
+export function formatOpportunityScope(data: Record<string, unknown>): string {
+  return sanitizeFieldValue(data.scope ?? data.region ?? data.geography, 40);
+}
+
+export function formatOpportunityFunding(data: Record<string, unknown>): string {
+  const amount = sanitizeFieldValue(data.max_funding ?? data.maxFunding ?? data.amount, 40);
+  const currency = sanitizeFieldValue(data.currency, 8);
+  if (amount && currency) return `${amount} ${currency}`;
+  return amount;
+}
+
+export function formatOpportunityDeadline(data: Record<string, unknown>): string {
+  return sanitizeFieldValue(data.deadline ?? data.closing_date ?? data.closes, 40);
+}
+
+export function formatOpportunityMeta(data: Record<string, unknown>): string {
+  const parts = [
+    formatOpportunityScope(data),
+    formatOpportunityFunding(data),
+    formatOpportunityDeadline(data),
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
 /** Etiqueta legible para mostrar en UI. */

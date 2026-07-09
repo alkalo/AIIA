@@ -1,4 +1,8 @@
-import type { AgentSpec, EffortLevel } from "./types.js";
+import type { AgentSpec, EffortLevel, OpportunitySubtype } from "./types.js";
+import {
+  defaultDedupeFields,
+  resolveOpportunitySubtype,
+} from "./opportunity-subtype.js";
 
 const VALID_EFFORTS: EffortLevel[] = [
   "low",
@@ -28,12 +32,21 @@ export function normalizeAgentSpec(spec: Partial<AgentSpec> & { id: string }): A
     ? spec.output.destinations
     : (["inbox"] as AgentSpec["output"]["destinations"]);
 
+  const opportunitySubtype: OpportunitySubtype | undefined =
+    spec.opportunitySubtype ?? resolveOpportunitySubtype(spec as AgentSpec);
+
+  const dedupeFields =
+    spec.filters?.dedupe?.fields?.length
+      ? spec.filters.dedupe.fields
+      : defaultDedupeFields({ ...spec, opportunitySubtype } as AgentSpec);
+
   return {
     id: spec.id,
     version: spec.version ?? 1,
     name: spec.name?.trim() || "New Agent",
     prompt: spec.prompt?.trim() || "",
     templateId: spec.templateId,
+    opportunitySubtype,
     contextAttachments: spec.contextAttachments,
     search: {
       queries: queries.length > 0 ? queries : [spec.prompt?.slice(0, 100) || "search"],
@@ -49,7 +62,7 @@ export function normalizeAgentSpec(spec: Partial<AgentSpec> & { id: string }): A
     filters: {
       criteria: spec.filters?.criteria ?? spec.prompt ?? "",
       minScore: spec.filters?.minScore ?? 55,
-      dedupe: spec.filters?.dedupe ?? { enabled: true, fields: ["title", "url"] },
+      dedupe: spec.filters?.dedupe ?? { enabled: true, fields: dedupeFields },
     },
     output: {
       schema,

@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import type { AgentSpec, EffortLevel, TemplateId } from "@aiia/agent-engine/browser";
+import type { AgentSpec, EffortLevel, TemplateId, OpportunitySubtype } from "@aiia/agent-engine/browser";
 import { getEffortEstimate, EFFORT_LEVELS } from "@aiia/ollama-client/browser";
 import "./AgentSpecEditor.css";
 
@@ -49,7 +49,20 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
   const urlSources = safe.sources
     .filter((s): s is { type: "url"; url: string } => s.type === "url")
     .map((s) => s.url);
+  const rssSources = safe.sources
+    .filter((s): s is { type: "rss"; url: string } => s.type === "rss")
+    .map((s) => `rss:${s.url}`);
+  const extraSourcesText = [...urlSources, ...rssSources].join("\n");
   const hasDdg = safe.sources.some((s) => s.type === "duckduckgo");
+
+  const OPPORTUNITY_SUBTYPES: OpportunitySubtype[] = [
+    "jobs",
+    "grants",
+    "tenders",
+    "events",
+    "deals",
+    "custom",
+  ];
 
   return (
     <div className="spec-editor">
@@ -84,6 +97,30 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
           <div className="spec-field">
             <label>{t("create.template")}</label>
             <p className="spec-value">{t(`templates.${camelTemplate(spec.templateId)}.name`)}</p>
+          </div>
+        )}
+        {(spec.templateId === "opportunities" || spec.opportunitySubtype) && (
+          <div className="spec-field">
+            <label>{t("spec.opportunitySubtype")}</label>
+            {editable ? (
+              <select
+                className="input"
+                value={spec.opportunitySubtype ?? "custom"}
+                onChange={(e) =>
+                  update({ opportunitySubtype: e.target.value as OpportunitySubtype })
+                }
+              >
+                {OPPORTUNITY_SUBTYPES.map((sub) => (
+                  <option key={sub} value={sub}>
+                    {t(`spec.opportunitySubtypes.${sub}`)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="spec-value">
+                {t(`spec.opportunitySubtypes.${spec.opportunitySubtype ?? "custom"}`)}
+              </p>
+            )}
           </div>
         )}
         <div className="spec-field">
@@ -184,21 +221,32 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
                 {truncateUrl(url)}
               </span>
             ))}
+            {rssSources.map((url) => (
+              <span key={url} className="spec-chip" title={url}>
+                RSS {truncateUrl(url.replace(/^rss:/, ""))}
+              </span>
+            ))}
           </div>
           {editable && (
             <textarea
               className="input textarea"
-              rows={2}
-              value={urlSources.join("\n")}
+              rows={3}
+              value={extraSourcesText}
               placeholder={t("spec.urlsPlaceholder")}
               onChange={(e) => {
-                const urls = e.target.value
+                const lines = e.target.value
                   .split("\n")
                   .map((u) => u.trim())
                   .filter(Boolean);
                 const sources: AgentSpec["search"]["sources"] = [];
-                if (hasDdg || urls.length === 0) sources.push({ type: "duckduckgo" });
-                urls.forEach((url) => sources.push({ type: "url", url }));
+                if (hasDdg || lines.length === 0) sources.push({ type: "duckduckgo" });
+                lines.forEach((line) => {
+                  if (line.toLowerCase().startsWith("rss:")) {
+                    sources.push({ type: "rss", url: line.slice(4).trim() });
+                  } else {
+                    sources.push({ type: "url", url: line });
+                  }
+                });
                 updateSearch({ sources });
               }}
             />

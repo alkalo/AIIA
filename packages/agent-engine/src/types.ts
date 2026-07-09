@@ -18,12 +18,15 @@ export interface PromptAttachment {
   extractedText: string;
 }
 
+export type OpportunitySubtype = "jobs" | "grants" | "tenders" | "events" | "deals" | "custom";
+
 export interface AgentSpec {
   id: string;
   version: number;
   name: string;
   prompt: string;
   templateId?: TemplateId;
+  opportunitySubtype?: OpportunitySubtype;
   contextAttachments?: PromptAttachment[];
   search: SearchConfig;
   filters: FilterConfig;
@@ -46,7 +49,8 @@ export interface SearchConfig {
 
 export type SearchSource =
   | { type: "duckduckgo" }
-  | { type: "url"; url: string };
+  | { type: "url"; url: string }
+  | { type: "rss"; url: string };
 
 export interface LoginRequirement {
   siteId: string;

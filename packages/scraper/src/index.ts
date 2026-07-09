@@ -76,3 +76,5 @@ async function loginToSite(
 
 export { connectAndSaveSession } from "./login.js";
 export type { ConnectSessionOptions, ConnectSessionResult } from "./login.js";
+export { fetchFeed, fetchUrlAsSnippet } from "./feed.js";
+export type { FeedItem } from "./feed.js";

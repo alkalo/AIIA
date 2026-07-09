@@ -52,11 +52,8 @@ export class PlannerAgent {
       );
     }
 
-    const { schema, queries, dedupeFields, resolvedTemplateId } = applyPlannerDefaults(
-      parsed,
-      userPrompt,
-      templateId
-    );
+    const { schema, queries, dedupeFields, resolvedTemplateId, opportunitySubtype } =
+      applyPlannerDefaults(parsed, userPrompt, templateId);
 
     const spec: AgentSpec = {
       id: uuidv4(),
@@ -64,6 +61,7 @@ export class PlannerAgent {
       name: parsed.name ?? "New Agent",
       prompt: parsed.prompt ?? userPrompt,
       templateId: resolvedTemplateId,
+      opportunitySubtype: parsed.opportunitySubtype ?? opportunitySubtype,
       search: {
         queries,
         sources: parsed.search?.sources?.length
