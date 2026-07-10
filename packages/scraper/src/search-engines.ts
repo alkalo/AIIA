@@ -47,6 +47,9 @@ const ALL_ENGINES: SearchEngineId[] = [
 let browser: Browser | null = null;
 
 export async function getBrowser(headless = true): Promise<Browser> {
+  if (browser && !browser.isConnected()) {
+    browser = null;
+  }
   if (!browser) {
     browser = await chromium.launch({ headless });
   }
@@ -80,9 +83,31 @@ function stripHtml(text: string): string {
     .trim();
 }
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'");
+}
+
+function decodeTrackingParam(raw: string): string | null {
+  if (raw.startsWith("a1")) {
+    try {
+      return Buffer.from(raw.slice(2), "base64").toString("utf8");
+    } catch {
+      return null;
+    }
+  }
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return null;
+}
+
 function normalizeUrl(href: string): string {
-  let url = href;
-  const uddg = href.match(/uddg=([^&]+)/);
+  let url = decodeHtmlEntities(href);
+  const uddg = url.match(/uddg=([^&]+)/);
   if (uddg) {
     try {
       url = decodeURIComponent(uddg[1]);
@@ -90,10 +115,12 @@ function normalizeUrl(href: string): string {
       /* keep */
     }
   }
-  const braveWrap = href.match(/[?&]u=([^&]+)/);
-  if (!uddg && /bing\.com\/ck\//i.test(href) && braveWrap) {
+  const tracking = url.match(/[?&]u=([^&]+)/);
+  if (!uddg && tracking && /bing\.com\/ck\/|search\.brave\.com/i.test(url)) {
     try {
-      url = decodeURIComponent(braveWrap[1]);
+      const decoded = decodeURIComponent(tracking[1]);
+      const resolved = decodeTrackingParam(decoded);
+      if (resolved) url = resolved;
     } catch {
       /* keep */
     }
@@ -102,9 +129,16 @@ function normalizeUrl(href: string): string {
   return url;
 }
 
+function isBlockedHtml(html: string): boolean {
+  if (html.length > 12_000 && /b_algo|result__a|class="title"/i.test(html)) return false;
+  return /captcha|cf-turnstile|challenge-platform|unusual traffic|anomaly-modal|bots use DuckDuckGo|<title>\s*Captcha\s*<\/title>/i.test(
+    html
+  );
+}
+
 function isValidResultUrl(url: string): boolean {
   if (!/^https?:\/\//i.test(url)) return false;
-  // Descartar enlaces internos del propio buscador y utilidades.
+  if (/bing\.com\/ck\/|duckduckgo\.com\/l\//i.test(url)) return false;
   return !/(duckduckgo\.com\/(?!l\/)|mojeek\.com\/search|bing\.com\/search|search\.brave\.com\/search|ecosia\.org\/search|microsoft\.com\/|go\.microsoft\.com)/i.test(
     url
   );
@@ -205,18 +239,20 @@ function parseDuckDuckGo(
 function parseBing(html: string, max: number): WebSearchResult[] {
   const items: WebSearchResult[] = [];
   const seen = new Set<string>();
-  const blocks = html.split(/<li class="b_algo"/).slice(1);
+  const blocks = html.split(/<li[^>]*class="[^"]*b_algo[^"]*"/i).slice(1);
   for (const block of blocks) {
     if (items.length >= max) break;
-    const titleMatch = block.match(/<h2>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    const titleMatch =
+      block.match(/<h2>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i) ??
+      block.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
     if (!titleMatch) continue;
     const url = normalizeUrl(titleMatch[1]);
     const title = stripHtml(titleMatch[2]);
     if (!title || !isValidResultUrl(url) || seen.has(url)) continue;
     seen.add(url);
     const snipMatch =
-      block.match(/<p class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/) ??
-      block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+      block.match(/<p class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i) ??
+      block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
     items.push({ title, url, snippet: snipMatch ? stripHtml(snipMatch[1]) : "", engine: "bing" });
   }
   return items;
@@ -278,12 +314,12 @@ async function genericFetchEngine(
       return { results: [], error: `${engine} HTTP ${res.status}`, retryable: res.status >= 500 };
     }
     const html = await res.text();
-    if (/captcha|cf-turnstile|challenge-platform|unusual traffic/i.test(html) && html.length < 4000) {
-      return { results: [], error: `${engine}: captcha/bot check`, retryable: false };
+    if (isBlockedHtml(html)) {
+      return { results: [], error: `${engine}: captcha/bot check`, retryable: true };
     }
     const results = parse(html, max);
     if (results.length === 0) {
-      return { results: [], error: `${engine}: no parseable results`, retryable: false };
+      return { results: [], error: `${engine}: no parseable results`, retryable: true };
     }
     return { results };
   } catch (err) {
@@ -338,14 +374,8 @@ const ENGINES: Record<SearchEngineId, EngineDef> = {
   },
   bing: {
     host: "bing.com",
-    minIntervalMs: 700,
-    run: (q, max) =>
-      genericFetchEngine(
-        "bing",
-        `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=es&count=${Math.min(30, max + 5)}`,
-        parseBing,
-        max
-      ),
+    minIntervalMs: 1500,
+    run: (q, max) => searchBingWithBrowser(q, max),
   },
   brave: {
     host: "search.brave.com",
@@ -385,6 +415,58 @@ async function runEngine(engineId: SearchEngineId, query: string, max: number): 
   });
 }
 
+/** Bing vía Playwright cuando el fetch HTTP devuelve HTML sin resultados o bloqueos. */
+async function searchBingWithBrowser(query: string, max: number): Promise<EngineOutcome> {
+  try {
+    const browser = await getBrowser(true);
+    const context = await browser.newContext({ userAgent: USER_AGENT, locale: "en-AU" });
+    const page = await context.newPage();
+    try {
+      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en&count=${Math.min(30, max + 5)}`;
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+      await page.waitForSelector("li.b_algo h2 a", { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+
+      const raw = await page.locator("li.b_algo").evaluateAll((items, maxN) => {
+        const out: { title: string; url: string; snippet: string }[] = [];
+        for (const li of items.slice(0, maxN as number)) {
+          const a = li.querySelector("h2 a");
+          if (!a) continue;
+          const p = li.querySelector("p");
+          const title = a.textContent?.trim() ?? "";
+          const href = (a as HTMLAnchorElement).href ?? "";
+          if (!title || !href) continue;
+          out.push({
+            title,
+            url: href,
+            snippet: p?.textContent?.trim()?.slice(0, 500) ?? "",
+          });
+        }
+        return out;
+      }, max);
+
+      const results = raw
+        .map((r) => ({
+          title: r.title,
+          url: normalizeUrl(r.url),
+          snippet: r.snippet,
+          engine: "bing" as const,
+        }))
+        .filter((r) => r.title && isValidResultUrl(r.url));
+
+      if (results.length === 0) {
+        return { results: [], error: "bing: browser fallback sin resultados", retryable: false };
+      }
+      return { results };
+    } finally {
+      await context.close();
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { results: [], error: `bing: browser fallback — ${msg}`, retryable: true };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Dedupe y API pública
 // ---------------------------------------------------------------------------
@@ -411,11 +493,11 @@ export function enginesForEffort(
 ): SearchEngineId[] {
   switch (effort) {
     case "low":
-      return ["mojeek", "duckduckgo-lite", "bing"];
+      return ["bing", "duckduckgo-lite", "mojeek"];
     case "medium":
-      return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "bing"];
+      return ["bing", "duckduckgo-html", "duckduckgo-lite", "mojeek"];
     default:
-      return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "bing", "brave", "ecosia"];
+      return ["bing", "duckduckgo-html", "duckduckgo-lite", "mojeek", "brave", "ecosia"];
   }
 }
 
@@ -427,22 +509,36 @@ export async function searchWeb(
   const engines = (options.engines ?? ALL_ENGINES).filter((e) => ENGINES[e]);
   const errors: SearchWebResponse["errors"] = [];
   const counts: Partial<Record<SearchEngineId, number>> = {};
+  let merged: WebSearchResult[] = [];
 
-  // Todos los motores por fetch en paralelo (sin navegador → sin timeouts largos).
-  const outcomes = await Promise.all(
-    engines.map(async (engineId) => {
-      const outcome = await runEngine(engineId, query, maxResults);
-      counts[engineId] = outcome.results.length;
-      if (outcome.error && outcome.results.length === 0) {
-        errors.push({ engine: engineId, message: outcome.error });
-      }
-      return outcome.results;
-    })
-  );
+  // Secuencial con parada temprana: evita rate limits por ráfagas paralelas.
+  for (const engineId of engines) {
+    if (merged.length >= maxResults) break;
+    const need = maxResults - merged.length;
+    const outcome = await runEngine(engineId, query, need);
+    counts[engineId] = (counts[engineId] ?? 0) + outcome.results.length;
+    if (outcome.error && outcome.results.length === 0) {
+      errors.push({ engine: engineId, message: outcome.error });
+    }
+    merged = dedupeResults([...merged, ...outcome.results]);
+  }
 
-  const merged = outcomes.flat();
+  // Fallback Playwright si los motores fetch no aportan suficientes resultados.
+  const minBeforeBrowser = Math.min(3, maxResults);
+  if (merged.length < minBeforeBrowser && !engines.includes("bing")) {
+    const browserOutcome = await throttleHost("bing.com", 1500, () =>
+      searchBingWithBrowser(query, maxResults - merged.length)
+    );
+    if (browserOutcome.results.length > 0) {
+      counts.bing = (counts.bing ?? 0) + browserOutcome.results.length;
+      merged = dedupeResults([...merged, ...browserOutcome.results]);
+    } else if (browserOutcome.error) {
+      errors.push({ engine: "bing", message: browserOutcome.error });
+    }
+  }
+
   return {
-    results: dedupeResults(merged).slice(0, maxResults),
+    results: merged.slice(0, maxResults),
     errors,
     counts,
   };
