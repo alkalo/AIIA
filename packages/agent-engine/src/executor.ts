@@ -44,9 +44,15 @@ import {
   type ActionLogger,
 } from "./run-logger.js";
 import { coerceJsonArray, coerceJsonObject } from "./json-utils.js";
-import { normalizeExtractedItem, validateOpportunityResult } from "./result-quality.js";
+import {
+  normalizeExtractedItem,
+  validateOpportunityResult,
+  isDirectGrantUrl,
+  isLowQualityGrantUrl,
+  resolveOpportunityUrl,
+} from "./result-quality.js";
 import { sectorExpansionQueries } from "./sector-sources.js";
-import { grantExpansionQueries } from "./grant-sources.js";
+import { grantExpansionQueries, grantSeedQueries } from "./grant-sources.js";
 import { isGrantTarget } from "./opportunity-subtype.js";
 import { sortByDeadlineAsc } from "./deadline.js";
 
@@ -142,6 +148,7 @@ export class Executor {
   private extractorModel = "qwen2.5:3b";
   private criticModel?: string;
   private runLog?: ActionLogger;
+  private searchLocale = "en-US";
 
   constructor(ollama?: OllamaClient) {
     this.ollama = ollama ?? new OllamaClient();
@@ -257,6 +264,7 @@ export class Executor {
         `Estrategia: olas=${profile.searchWaves}, rank IA=${profile.llmRank ? "sí" : "no"}, fetch=${profile.fetchPolicy}, extract=${profile.extractPolicy}`,
         `Límite de enlaces: ${maxSources}${searchLimits.fromAgentConfig ? " (configurado en agente)" : ` (modo ${effort})`}`,
         `Motores web: ${webEngines.join(", ")}`,
+        `Locale búsqueda: ${resolveSearchLocale(spec)}`,
         `Objetivo: ${truncate(spec.prompt, 200)}`,
       ].join("\n"),
       "planning"
@@ -271,6 +279,13 @@ export class Executor {
 
     let plan: SearchPlan = await buildSearchPlan(spec, profile, this.ollama, this.plannerModel, cfg.numCtx);
     let queries = queriesFromPlan(plan);
+    if (isGrantTarget(spec)) {
+      const grantSeeds = grantSeedQueries(spec, Math.max(10, cfg.queryExpansion + 4));
+      queries = [...new Set([...grantSeeds, ...queries])].slice(0, Math.max(14, grantSeeds.length + 4));
+    }
+
+    const searchLocale = resolveSearchLocale(spec);
+    this.searchLocale = searchLocale;
 
     const seedSources = await this.collectSeedSources(spec, log);
     let rankedSources: RankedSource[] = seedSources.length
@@ -630,25 +645,39 @@ export class Executor {
     let filtered = await this.filterItems(extracted, spec, cfg, rankedSources);
 
     if (profile.useCritic && this.criticModel && filtered.length > 0) {
-      progress("evaluating", 78, "Revisión crítica Pro…", {
-        thinkingStep: "Modelo superior re-evaluando",
-        action: LogAction.LLM_CRITIC,
-      });
-      const beforeTop = filtered.slice(0, 5).map((i) => `${truncate(String(i.title ?? i.url), 40)} (${i.score ?? "?"})`);
-      filtered = await this.criticPass(filtered, spec, cfg);
-      log(
-        LogAction.LLM_CRITIC,
-        `Revisión Pro con ${this.criticModel}`,
-        [
-          "Antes (top 5):",
-          formatBulletList(beforeTop),
-          "Después (top 5):",
-          formatBulletList(
-            filtered.slice(0, 5).map((i) => `${truncate(String(i.title ?? i.url), 40)} (${i.score ?? "?"}) — ${truncate(String(i.reason ?? ""), 60)}`)
-          ),
-        ].join("\n"),
-        "evaluating"
+      const allHeuristic = filtered.every(
+        (i) =>
+          !i.reason ||
+          /heuristic|serp fallback|extracted/i.test(String(i.reason))
       );
+      if (allHeuristic && filtered.length <= 5) {
+        log(
+          LogAction.INFO,
+          "Revisión Pro omitida — resultados heurísticos/SERP",
+          undefined,
+          "evaluating"
+        );
+      } else {
+        progress("evaluating", 78, "Revisión crítica Pro…", {
+          thinkingStep: "Modelo superior re-evaluando",
+          action: LogAction.LLM_CRITIC,
+        });
+        const beforeTop = filtered.slice(0, 5).map((i) => `${truncate(String(i.title ?? i.url), 40)} (${i.score ?? "?"})`);
+        filtered = await this.criticPass(filtered, spec, cfg);
+        log(
+          LogAction.LLM_CRITIC,
+          `Revisión Pro con ${this.criticModel}`,
+          [
+            "Antes (top 5):",
+            formatBulletList(beforeTop),
+            "Después (top 5):",
+            formatBulletList(
+              filtered.slice(0, 5).map((i) => `${truncate(String(i.title ?? i.url), 40)} (${i.score ?? "?"}) — ${truncate(String(i.reason ?? ""), 60)}`)
+            ),
+          ].join("\n"),
+          "evaluating"
+        );
+      }
     }
 
     const minScore = effectiveMinScore(effort, spec.filters.minScore ?? 70);
@@ -657,10 +686,18 @@ export class Executor {
       .filter((item) => validateOpportunityResult(item, spec))
       .filter((item) => (item.score ?? 0) >= minScore);
 
-    if (finalItems.length === 0 && extracted.length > 0) {
+    if (finalItems.length === 0 && rankedSources.length > 0) {
       finalItems = serpToExtractedItems(rankedSources, spec)
         .map((item) => normalizeExtractedItem(item))
-        .filter((item) => validateOpportunityResult(item, spec))
+        .filter((item) => {
+          if (!validateOpportunityResult(item, spec)) return false;
+          if (!isGrantTarget(spec)) return true;
+          const url = String(item.url ?? "");
+          return isDirectGrantUrl(url) || (!isLowQualityGrantUrl(url) &&
+            /\b(grant|funding|deadline|closing|opportunity)\b/i.test(
+              `${item.title ?? ""} ${item.description ?? ""} ${item.summary ?? ""}`
+            ));
+        })
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
         .slice(0, Math.max(3, Math.ceil(rankedSources.length * 0.5)));
       progress("filtering", 78, `Fallback SERP — ${finalItems.length} enlaces`);
@@ -783,7 +820,7 @@ export class Executor {
         const { results, counts, errors } = await searchWeb(query, perQuery, {
           engines: webEngines,
           debugDir: collected.length === 0 && existing.length === 0 ? debugDir : undefined,
-          locale: "es-ES",
+          locale: this.searchLocale,
         });
         for (const [eng, n] of Object.entries(counts)) {
           engineTotals[eng as SearchEngineId] = (engineTotals[eng as SearchEngineId] ?? 0) + (n ?? 0);
@@ -997,15 +1034,16 @@ export class Executor {
     const systemPrompt = grant
       ? `Extract grant/funding opportunity fields from this page. Return JSON: ${schema.join(", ")}.
 Rules:
+- Only extract a CONCRETE open grant/call (named program with eligibility or deadline). Reject portal landing pages, navigation hubs, and generic "Grants" finders — set score below 40 for those.
 - scope: geographic scope like NATIONAL, GLOBAL, AU & NZ, EU, ES — infer from content
 - organization: funding body or company offering the grant
-- program_name: official program or grant name
+- program_name: official program or grant name (not the website title)
 - description: 1-3 sentence summary of who it supports and what it funds
 - max_funding: maximum amount as written (e.g. Up to $15,000)
 - currency: ISO or symbol if clear (USD, AUD, EUR)
 - deadline: closing date as written (e.g. Closing 30 July)
-- url: direct link to apply or official call page
-- If not a grant/funding opportunity, set score below 40
+- url: direct link to apply or official call page (deep link, not homepage)
+- If not a specific grant/funding opportunity, set score below 40
 Source URL: ${result.url}`
       : `Extract relevant fields from this job posting page. Return JSON: ${schema.join(", ")}.
 Rules:
@@ -1031,12 +1069,23 @@ Source URL: ${result.url}`;
           temperature: Math.min(0.3, cfg.temperature),
           format: "json",
           numCtx: cfg.numCtx,
+          timeoutMs: 90_000,
         }
       );
       const parsed = normalizeExtractedItem(
         (coerceJsonObject<ExtractedItem>(response) ?? {}) as ExtractedItem
       );
-      parsed.url = result.url;
+      const llmUrl = resolveOpportunityUrl(parsed as Record<string, unknown>);
+      if (
+        llmUrl &&
+        /^https?:\/\//i.test(llmUrl) &&
+        llmUrl !== result.url &&
+        (!isLowQualityGrantUrl(llmUrl) || isDirectGrantUrl(llmUrl))
+      ) {
+        parsed.url = llmUrl;
+      } else {
+        parsed.url = result.url;
+      }
       const title = parsed.title;
       parsed.title =
         (typeof title === "string" ? title.trim() : title != null ? String(title) : "") || result.title;
@@ -1178,6 +1227,17 @@ function engineLabel(id: SearchEngineId): string {
   return "Bing";
 }
 
+function resolveSearchLocale(spec: AgentSpec): string {
+  const blob = `${spec.prompt} ${spec.filters.criteria} ${spec.search.queries.join(" ")}`;
+  if (/australia|australian|au\b|new zealand|nz\b/i.test(blob)) return "en-AU";
+  if (/spain|españa|español|madrid|barcelona|subvenci[oó]n|convocatoria/i.test(blob) &&
+      !/australia|new zealand|global|international/i.test(blob)) {
+    return "es-ES";
+  }
+  if (/uk\b|united kingdom|england/i.test(blob)) return "en-GB";
+  return "en-US";
+}
+
 function normalizeUrl(url: string): string {
   try {
     const u = new URL(url);
@@ -1191,8 +1251,14 @@ function normalizeUrl(url: string): string {
 function dedupeItems(items: ExtractedItem[], fields: string[]): ExtractedItem[] {
   const seen = new Set<string>();
   return items.filter((item) => {
-    const key = fields.map((f) => String(item[f] ?? "")).join("|");
-    if (seen.has(key)) return false;
+    const values = fields.map((f) => String(item[f] ?? "").trim());
+    const allEmpty = values.every((v) => !v);
+    const key = allEmpty
+      ? `url:${String(item.url ?? item.link ?? "").trim().toLowerCase()}`
+      : values.every((v) => v.length > 0)
+        ? values.map((v) => v.toLowerCase()).join("|")
+        : `url:${String(item.url ?? item.link ?? "").trim().toLowerCase()}|${values.join("|")}`;
+    if (!key || key === "url:" || seen.has(key)) return false;
     seen.add(key);
     return true;
   });

@@ -68,6 +68,68 @@ export function isLowQualityJobUrl(url: string): boolean {
   return LOW_QUALITY_JOB_URL_PATTERNS.some((p) => p.test(url));
 }
 
+const DIRECT_GRANT_URL_PATTERNS = [
+  /\/grants?\//i,
+  /\/grant\//i,
+  /\/funding\//i,
+  /\/fund\//i,
+  /\/opportunity/i,
+  /\/opportunities\//i,
+  /\/program(me)?s?\//i,
+  /\/apply/i,
+  /\/call\//i,
+  /\/convocatoria/i,
+  /\/subvenci/i,
+  /grantid=/i,
+  /opportunityid=/i,
+  /gouuid=/i,
+  /\/go\/show/i,
+  /\/viewgrant/i,
+  /\/grant-details/i,
+  /\/funding-opportunity/i,
+];
+
+const LOW_QUALITY_GRANT_URL_PATTERNS = [
+  /wikipedia\.org/i,
+  /youtube\.com/i,
+  /facebook\.com/i,
+  /linkedin\.com\/(company|in)\//i,
+  /\/search\?/i,
+  /\/news\//i,
+  /\/blog\//i,
+  /\/about(\/|$)/i,
+  /\/contact(\/|$)/i,
+  /\/login/i,
+  /\/cart/i,
+];
+
+export function isDirectGrantUrl(url: string): boolean {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/$/, "") || "/";
+    if (path === "/" || path === "") return false;
+    // Generic listing roots without a deeper segment are low-value.
+    if (/^\/grants?$/i.test(path) || /^\/funding$/i.test(path)) return false;
+    return DIRECT_GRANT_URL_PATTERNS.some((p) => p.test(url));
+  } catch {
+    return DIRECT_GRANT_URL_PATTERNS.some((p) => p.test(url));
+  }
+}
+
+export function isLowQualityGrantUrl(url: string): boolean {
+  if (!url) return true;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/$/, "") || "/";
+    if (path === "/" || path === "") return true;
+    if (/^\/grants?$/i.test(path)) return true;
+  } catch {
+    /* keep */
+  }
+  return LOW_QUALITY_GRANT_URL_PATTERNS.some((p) => p.test(url));
+}
+
 /** URL preferida para oportunidades (grants, tenders, jobs). */
 export function resolveOpportunityUrl(data: Record<string, unknown>): string {
   const candidates = [
@@ -182,7 +244,22 @@ export function validateOpportunityResult(item: ExtractedItem, spec: AgentSpec):
     const url = resolveOpportunityUrl(normalized as Record<string, unknown>);
     if (!program && !org) return false;
     if (!url && !program) return false;
+    if (url && isLowQualityGrantUrl(url) && !isDirectGrantUrl(url)) return false;
     if (isExpiredDeadline(normalized.deadline ?? normalized.closing_date)) return false;
+
+    const deadline = sanitizeFieldValue(
+      normalized.deadline ?? normalized.closing_date ?? normalized.closingDate
+    );
+    const funding = sanitizeFieldValue(
+      normalized.max_funding ??
+        normalized.maxFunding ??
+        normalized.amount ??
+        normalized.funding_amount ??
+        normalized.fundingAmount
+    );
+    const deep = url ? isDirectGrantUrl(url) : false;
+    // Require a concrete signal: deadline, funding amount, or deep call URL.
+    if (!deadline && !funding && !deep) return false;
     return true;
   }
 

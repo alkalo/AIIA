@@ -153,8 +153,9 @@ export function grantExpansionQueries(
     : [
         `${core} grant application deadline`,
         `${core} funding opportunity open`,
-        `${core} community grant closing`,
-        `${core} foundation grant apply`,
+        `${core} community grant closing date`,
+        `${core} foundation grant apply now`,
+        `${core} open round grants`,
       ];
   for (const v of variants) {
     push(v);
@@ -162,4 +163,47 @@ export function grantExpansionQueries(
   }
 
   return out.slice(0, count);
+}
+
+/** Banco de consultas EN prioritarias para ola 0 (antes / junto al plan LLM). */
+export function grantSeedQueries(spec: AgentSpec, max = 12): string[] {
+  if (!isGrantTarget(spec)) return [];
+  const used = new Set<string>();
+  const out: string[] = [];
+  const push = (q: string) => {
+    const norm = q.trim().toLowerCase();
+    if (!norm || used.has(norm)) return;
+    used.add(norm);
+    out.push(q.trim());
+  };
+
+  const blob = `${spec.prompt} ${spec.filters.criteria}`;
+  const au = /australia|australian|au\b/i.test(blob);
+  const nz = /new zealand|nz\b/i.test(blob);
+
+  if (au) {
+    push("community grant australia open deadline");
+    push("FRRR community grant application open");
+    push("site:business.gov.au/grants community wellbeing open");
+    push("site:grants.gov.au open grant community");
+    push("site:communitygrants.gov.au grant open");
+    push("site:frrr.org.au funding grant closing");
+    push("site:philanthropy.org.au grant open");
+  }
+  if (nz) {
+    push("new zealand community wellbeing grant open");
+    push("site:communitymatters.govt.nz grant open");
+    push("new zealand lottery grants board community");
+  }
+  if (!au && !nz) {
+    push("community grant open deadline funding");
+    push("global community wellbeing grant application");
+  }
+  push("global community wellbeing grant application open");
+  push("site:fundsforngos.org australia community grant");
+
+  const expanded = grantExpansionQueries(spec, used, Math.max(0, max - out.length));
+  for (const q of expanded) push(q);
+
+  return out.slice(0, max);
 }

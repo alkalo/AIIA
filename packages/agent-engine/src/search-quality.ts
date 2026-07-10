@@ -144,10 +144,21 @@ export function grantTargetAdjustment(url: string, contentBlob: string, spec: Ag
   if (!isGrantTarget(spec)) return 0;
   let adj = 0;
   const hay = contentBlob.toLowerCase();
-  if (GRANT_DOMAIN_PATTERNS.some((p) => p.test(url) || p.test(hay))) adj += 25;
-  if (/\.gov(\.|\/|$)/i.test(url) || /\.gob\.es/i.test(url)) adj += 20;
+  try {
+    const path = new URL(url).pathname.replace(/\/$/, "") || "/";
+    if (path === "/" || path === "") adj -= 35;
+    else if (/^\/grants?$/i.test(path) || /^\/funding$/i.test(path)) adj -= 20;
+    else if (/\/(grant|funding|opportunity|program|apply|call)\b/i.test(path)) adj += 30;
+  } catch {
+    /* ignore */
+  }
+  if (GRANT_DOMAIN_PATTERNS.some((p) => p.test(url) || p.test(hay))) {
+    // Domain match alone is weak on portal roots; deep paths already got a bonus.
+    adj += 10;
+  }
+  if (/\.gov(\.|\/|$)/i.test(url) || /\.gob\.es/i.test(url)) adj += 15;
   if (JOB_BOARD_PATTERNS.some((p) => p.test(url))) adj -= 30;
-  if (/\b(deadline|closing|convocatoria|grant|funding|subvenci)/i.test(hay)) adj += 10;
+  if (/\b(deadline|closing|convocatoria|grant|funding|subvenci|open round)\b/i.test(hay)) adj += 12;
   return adj;
 }
 

@@ -35,12 +35,18 @@ export function Inbox() {
     setLoading(true);
     try {
       if (filterAgent) {
-        await api.syncLatestRunResults(filterAgent);
+        try {
+          await api.syncLatestRunResults(filterAgent);
+        } catch (e) {
+          console.warn("Inbox sync failed", e);
+        }
       }
       const data = await api.listResults(filterAgent || undefined, 200);
       setResults(data);
-    } catch {
-      setResults([]);
+    } catch (e) {
+      console.warn("Inbox list failed", e);
+      // Keep previous results if list fails; only clear when we have no prior data.
+      setResults((prev) => prev);
     } finally {
       setLoading(false);
     }
@@ -55,9 +61,14 @@ export function Inbox() {
     listen<{ agentId?: string }>("agent-run-complete", (event) => {
       const agentId = event.payload.agentId;
       if (agentId) {
-        void api.syncLatestRunResults(agentId).then(() => refresh());
+        void api
+          .syncLatestRunResults(agentId)
+          .catch((e) => console.warn("Inbox sync on complete failed", e))
+          .finally(() => {
+            void refresh();
+          });
       } else {
-        refresh();
+        void refresh();
       }
     }).then((fn) => unsubs.push(fn));
     return () => unsubs.forEach((fn) => fn());

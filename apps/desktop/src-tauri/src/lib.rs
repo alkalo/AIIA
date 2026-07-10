@@ -423,18 +423,31 @@ fn sync_run_results_from_disk(
     }
 
     for (run_id, aid) in run_agents {
-        if db.count_results_for_run(&run_id).unwrap_or(0) > 0 {
-            continue;
-        }
         let Some(results) = best_run_results(data_dir, &aid, &run_id) else {
             continue;
         };
         if results.is_empty() {
             continue;
         }
-        total += db
-            .save_results(&aid, &run_id, &results)
-            .map_err(|e| e.to_string())?;
+        let existing = db.count_results_for_run(&run_id).unwrap_or(0);
+        // Reimport when disk has more items than DB (partial/failed prior save).
+        if existing > 0 && (results.len() as i32) <= existing {
+            continue;
+        }
+        if db.get_agent(&aid).is_err() {
+            eprintln!("AIIA: sync skip run {run_id} — agent {aid} not in DB");
+            continue;
+        }
+        match db.save_results(&aid, &run_id, &results) {
+            Ok(n) => {
+                eprintln!("AIIA: synced {n} results for run {run_id} (was {existing} in DB)");
+                total += n;
+            }
+            Err(e) => {
+                eprintln!("AIIA: sync save_results failed for {run_id}: {e}");
+                return Err(format!("Failed to sync results for run {run_id}: {e}"));
+            }
+        }
     }
 
     Ok(total)
@@ -1311,6 +1324,10 @@ fn persist_run_results(
 ) -> i32 {
     let results = best_run_results(data_dir, agent_id, run_id).filter(|r| !r.is_empty());
     if let Some(items) = results {
+        if db.get_agent(agent_id).is_err() {
+            eprintln!("AIIA: save_results skipped — agent {agent_id} missing from DB");
+            return 0;
+        }
         match db.save_results(agent_id, run_id, &items) {
             Ok(n) => {
                 eprintln!("AIIA: saved {n} results for run {run_id}");

@@ -2,6 +2,8 @@ import type { OllamaClient, ResearchProfile } from "@aiia/ollama-client";
 import type { AgentSpec, SearchResult } from "./types.js";
 import { rankSearchResults, type SearchHit } from "./search-quality.js";
 import { coerceJsonArray } from "./json-utils.js";
+import { isGrantTarget } from "./opportunity-subtype.js";
+import { isDirectGrantUrl, isLowQualityGrantUrl } from "./result-quality.js";
 
 export type FetchPriority = "high" | "medium" | "skip";
 
@@ -27,12 +29,20 @@ export async function rankSources(
   plannerModel: string,
   numCtx: number
 ): Promise<RankedSource[]> {
-  const heuristic = rankSearchResults(hits, spec, limit).map((r, i) => ({
-    ...r,
-    relevance: 70 - i,
-    fetchPriority: profile.fetchPolicy === "none" ? ("skip" as const) : ("medium" as const),
-    rankReason: "Heuristic rank",
-  }));
+  const heuristic = rankSearchResults(hits, spec, limit).map((r, i) => {
+    const lowGrant =
+      isGrantTarget(spec) &&
+      isLowQualityGrantUrl(r.url) &&
+      !isDirectGrantUrl(r.url);
+    return {
+      ...r,
+      relevance: lowGrant ? Math.min(40, 70 - i) : 70 - i,
+      fetchPriority: (profile.fetchPolicy === "none" || lowGrant
+        ? "skip"
+        : "medium") as FetchPriority,
+      rankReason: lowGrant ? "Portal homepage — skip fetch" : "Heuristic rank",
+    };
+  });
 
   if (!profile.llmRank || hits.length === 0) {
     return applyFetchPolicy(heuristic, profile, limit);
@@ -47,7 +57,7 @@ export async function rankSources(
           role: "system",
           content: `Score each search result for relevance to the user goal (0-100).
 Return JSON array: [{"url":"...", "relevance": 0-100, "fetchPriority": "high"|"medium"|"skip", "reason": "brief"}]
-Prioritize authoritative sources matching the goal. Mark low-quality or off-topic as skip.`,
+Prioritize authoritative sources matching the goal. Prefer individual grant/call/opportunity pages over portal homepages or generic /grants finders. Mark low-quality, off-topic, or bare homepage roots as skip.`,
         },
         {
           role: "user",

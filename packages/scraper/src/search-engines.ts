@@ -147,7 +147,8 @@ function isValidResultUrl(url: string): boolean {
 async function fetchWithTimeout(
   url: string,
   timeoutMs: number,
-  init?: RequestInit
+  init?: RequestInit,
+  acceptLanguage = "en-US,en;q=0.9"
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -158,7 +159,7 @@ async function fetchWithTimeout(
       headers: {
         "User-Agent": USER_AGENT,
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Accept-Language": acceptLanguage,
         ...(init?.headers ?? {}),
       },
     });
@@ -248,7 +249,12 @@ function parseBing(html: string, max: number): WebSearchResult[] {
     if (!titleMatch) continue;
     const url = normalizeUrl(titleMatch[1]);
     const title = stripHtml(titleMatch[2]);
-    if (!title || !isValidResultUrl(url) || seen.has(url)) continue;
+    if (!title || title.length < 3 || /https?:\/\//i.test(title)) continue;
+    if (!isValidResultUrl(url) || seen.has(url)) continue;
+    // Discard SEO spam / bot-bait pages that often appear when Bing blocks scrapers.
+    if (/testquery|encyclopedia.?backstage|positioniseverything|solmusical/i.test(url + title)) {
+      continue;
+    }
     seen.add(url);
     const snipMatch =
       block.match(/<p class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i) ??
@@ -295,7 +301,32 @@ function parseEcosia(html: string, max: number): WebSearchResult[] {
 interface EngineDef {
   host: string;
   minIntervalMs: number;
-  run: (query: string, max: number) => Promise<EngineOutcome>;
+  run: (query: string, max: number, locale: string) => Promise<EngineOutcome>;
+}
+
+function acceptLanguageFor(locale: string): string {
+  if (locale.toLowerCase().startsWith("es")) return "es-ES,es;q=0.9,en;q=0.8";
+  if (locale.toLowerCase().startsWith("en-au")) return "en-AU,en;q=0.9";
+  if (locale.toLowerCase().startsWith("en-nz")) return "en-NZ,en;q=0.9";
+  return "en-US,en;q=0.9";
+}
+
+function ddgKlFor(locale: string): string {
+  const l = locale.toLowerCase();
+  if (l.startsWith("es")) return "es-es";
+  if (l.startsWith("en-au")) return "au-en";
+  if (l.startsWith("en-nz")) return "nz-en";
+  if (l.startsWith("en-gb")) return "uk-en";
+  return "us-en";
+}
+
+function bingLangParams(locale: string): { setlang: string; cc: string } {
+  const l = locale.toLowerCase();
+  if (l.startsWith("es")) return { setlang: "es", cc: "ES" };
+  if (l.startsWith("en-au")) return { setlang: "en", cc: "AU" };
+  if (l.startsWith("en-nz")) return { setlang: "en", cc: "NZ" };
+  if (l.startsWith("en-gb")) return { setlang: "en", cc: "GB" };
+  return { setlang: "en", cc: "US" };
 }
 
 async function genericFetchEngine(
@@ -303,10 +334,11 @@ async function genericFetchEngine(
   url: string,
   parse: (html: string, max: number) => WebSearchResult[],
   max: number,
-  init?: RequestInit
+  init?: RequestInit,
+  locale = "en-US"
 ): Promise<EngineOutcome> {
   try {
-    const res = await fetchWithTimeout(url, 12000, init);
+    const res = await fetchWithTimeout(url, 12000, init, acceptLanguageFor(locale));
     if (res.status === 403 || res.status === 429) {
       return { results: [], error: `${engine} rate limit (${res.status})`, retryable: true };
     }
@@ -328,22 +360,73 @@ async function genericFetchEngine(
   }
 }
 
+function resultsLookRelevant(query: string, results: WebSearchResult[]): boolean {
+  if (results.length === 0) return false;
+  const stop = new Set([
+    "site", "https", "http", "www", "open", "with", "from", "that", "this", "into", "for", "and", "the",
+  ]);
+  const tokens = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length > 3 && !stop.has(t));
+  if (tokens.length === 0) return true;
+  let matched = 0;
+  for (const r of results) {
+    const hay = `${r.title} ${r.snippet} ${r.url}`.toLowerCase();
+    if (tokens.some((t) => hay.includes(t))) matched++;
+  }
+  return matched / results.length >= 0.4 || matched >= 2;
+}
+
+async function searchBingHttp(query: string, max: number, locale: string): Promise<EngineOutcome> {
+  const { setlang, cc } = bingLangParams(locale);
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=${setlang}&cc=${cc}&count=${Math.min(30, max + 5)}`;
+  const outcome = await genericFetchEngine("bing", url, parseBing, max, undefined, locale);
+  if (outcome.results.length === 0) {
+    return { results: [], error: outcome.error ?? "bing: http sin resultados", retryable: true };
+  }
+  if (!resultsLookRelevant(query, outcome.results)) {
+    return { results: [], error: "bing: http resultados irrelevantes", retryable: true };
+  }
+  return outcome;
+}
+
+/** Bing: HTTP primero; Playwright solo si falla o 0 resultados. */
+async function searchBing(query: string, max: number, locale: string): Promise<EngineOutcome> {
+  const http = await searchBingHttp(query, max, locale);
+  if (http.results.length > 0) return http;
+  const browser = await searchBingWithBrowser(query, max, locale);
+  if (browser.results.length > 0) {
+    if (!resultsLookRelevant(query, browser.results)) {
+      return { results: [], error: "bing: browser resultados irrelevantes", retryable: true };
+    }
+    return browser;
+  }
+  return {
+    results: [],
+    error: http.error ?? browser.error ?? "bing: no results",
+    retryable: true,
+  };
+}
+
 const ENGINES: Record<SearchEngineId, EngineDef> = {
   mojeek: {
     host: "mojeek.com",
     minIntervalMs: 1200,
-    run: (q, max) =>
+    run: (q, max, locale) =>
       genericFetchEngine(
         "mojeek",
         `https://www.mojeek.com/search?q=${encodeURIComponent(q)}`,
         parseMojeek,
-        max
+        max,
+        undefined,
+        locale
       ),
   },
   "duckduckgo-html": {
     host: "duckduckgo.com",
     minIntervalMs: 900,
-    run: (q, max) =>
+    run: (q, max, locale) =>
       genericFetchEngine(
         "duckduckgo-html",
         "https://html.duckduckgo.com/html/",
@@ -352,14 +435,15 @@ const ENGINES: Record<SearchEngineId, EngineDef> = {
         {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `q=${encodeURIComponent(q)}&kl=es-es`,
-        }
+          body: `q=${encodeURIComponent(q)}&kl=${ddgKlFor(locale)}`,
+        },
+        locale
       ),
   },
   "duckduckgo-lite": {
     host: "duckduckgo.com",
     minIntervalMs: 900,
-    run: (q, max) =>
+    run: (q, max, locale) =>
       genericFetchEngine(
         "duckduckgo-lite",
         "https://lite.duckduckgo.com/lite/",
@@ -368,47 +452,57 @@ const ENGINES: Record<SearchEngineId, EngineDef> = {
         {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `q=${encodeURIComponent(q)}&kl=es-es`,
-        }
+          body: `q=${encodeURIComponent(q)}&kl=${ddgKlFor(locale)}`,
+        },
+        locale
       ),
   },
   bing: {
     host: "bing.com",
     minIntervalMs: 1500,
-    run: (q, max) => searchBingWithBrowser(q, max),
+    run: (q, max, locale) => searchBing(q, max, locale),
   },
   brave: {
     host: "search.brave.com",
     minIntervalMs: 1200,
-    run: (q, max) =>
+    run: (q, max, locale) =>
       genericFetchEngine(
         "brave",
         `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`,
         parseBrave,
-        max
+        max,
+        undefined,
+        locale
       ),
   },
   ecosia: {
     host: "ecosia.org",
     minIntervalMs: 1000,
-    run: (q, max) =>
+    run: (q, max, locale) =>
       genericFetchEngine(
         "ecosia",
         `https://www.ecosia.org/search?method=index&q=${encodeURIComponent(q)}`,
         parseEcosia,
-        max
+        max,
+        undefined,
+        locale
       ),
   },
 };
 
-async function runEngine(engineId: SearchEngineId, query: string, max: number): Promise<EngineOutcome> {
+async function runEngine(
+  engineId: SearchEngineId,
+  query: string,
+  max: number,
+  locale: string
+): Promise<EngineOutcome> {
   const def = ENGINES[engineId];
   if (!def) return { results: [], error: `Unknown engine ${engineId}` };
   return throttleHost(def.host, def.minIntervalMs, async () => {
     let last: EngineOutcome = { results: [], error: `${engineId} not attempted` };
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) await sleep(700 * attempt);
-      last = await def.run(query, max);
+      last = await def.run(query, max, locale);
       if (last.results.length > 0 || !last.retryable) break;
     }
     return last;
@@ -425,14 +519,22 @@ function withBrowserSearchLock<T>(task: () => Promise<T>): Promise<T> {
 }
 
 /** Bing vía Playwright cuando el fetch HTTP devuelve HTML sin resultados o bloqueos. */
-async function searchBingWithBrowser(query: string, max: number): Promise<EngineOutcome> {
+async function searchBingWithBrowser(
+  query: string,
+  max: number,
+  locale = "en-AU"
+): Promise<EngineOutcome> {
   return withBrowserSearchLock(async () => {
     try {
+      const { setlang, cc } = bingLangParams(locale);
       const browser = await getBrowser(true);
-      const context = await browser.newContext({ userAgent: USER_AGENT, locale: "en-AU" });
+      const context = await browser.newContext({
+        userAgent: USER_AGENT,
+        locale: locale.startsWith("es") ? "es-ES" : locale,
+      });
       const page = await context.newPage();
       try {
-        const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en&count=${Math.min(30, max + 5)}`;
+        const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=${setlang}&cc=${cc}&count=${Math.min(30, max + 5)}`;
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
         await page.waitForSelector("li.b_algo h2 a", { timeout: 15000 }).catch(() => {});
         await page.waitForTimeout(2000);
@@ -465,7 +567,7 @@ async function searchBingWithBrowser(query: string, max: number): Promise<Engine
           .filter((r) => r.title && isValidResultUrl(r.url));
 
         if (results.length === 0) {
-          return { results: [], error: "bing: browser fallback sin resultados", retryable: false };
+          return { results: [], error: "bing: browser fallback sin resultados", retryable: true };
         }
         return { results };
       } finally {
@@ -502,13 +604,14 @@ function dedupeResults(results: WebSearchResult[]): WebSearchResult[] {
 export function enginesForEffort(
   effort: "low" | "medium" | "high" | "super_high" | "ultra_high"
 ): SearchEngineId[] {
+  // Mojeek first: Bing HTTP is often bot-poisoned; keep Bing for Playwright fallback later.
   switch (effort) {
     case "low":
-      return ["bing", "duckduckgo-lite", "mojeek"];
+      return ["mojeek", "duckduckgo-lite", "bing"];
     case "medium":
-      return ["bing", "duckduckgo-html", "duckduckgo-lite", "mojeek"];
+      return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "bing"];
     default:
-      return ["bing", "duckduckgo-html", "duckduckgo-lite", "mojeek", "brave", "ecosia"];
+      return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "brave", "ecosia", "bing"];
   }
 }
 
@@ -518,6 +621,7 @@ export async function searchWeb(
   options: SearchWebOptions = {}
 ): Promise<SearchWebResponse> {
   const engines = (options.engines ?? ALL_ENGINES).filter((e) => ENGINES[e]);
+  const locale = options.locale ?? "en-US";
   const errors: SearchWebResponse["errors"] = [];
   const counts: Partial<Record<SearchEngineId, number>> = {};
   let merged: WebSearchResult[] = [];
@@ -526,7 +630,7 @@ export async function searchWeb(
   for (const engineId of engines) {
     if (merged.length >= maxResults) break;
     const need = maxResults - merged.length;
-    const outcome = await runEngine(engineId, query, need);
+    const outcome = await runEngine(engineId, query, need, locale);
     counts[engineId] = (counts[engineId] ?? 0) + outcome.results.length;
     if (outcome.error && outcome.results.length === 0) {
       errors.push({ engine: engineId, message: outcome.error });
@@ -534,16 +638,17 @@ export async function searchWeb(
     merged = dedupeResults([...merged, ...outcome.results]);
   }
 
-  // Fallback Playwright si los motores fetch no aportan suficientes resultados.
+  // Fallback Playwright si aún faltan resultados (también cuando Bing ya estaba en la lista
+  // pero solo aportó HTTP vacío / bloqueado).
   const minBeforeBrowser = Math.min(3, maxResults);
-  if (merged.length < minBeforeBrowser && !engines.includes("bing")) {
+  if (merged.length < minBeforeBrowser) {
     const browserOutcome = await throttleHost("bing.com", 1500, () =>
-      searchBingWithBrowser(query, maxResults - merged.length)
+      searchBingWithBrowser(query, maxResults - merged.length, locale)
     );
     if (browserOutcome.results.length > 0) {
       counts.bing = (counts.bing ?? 0) + browserOutcome.results.length;
       merged = dedupeResults([...merged, ...browserOutcome.results]);
-    } else if (browserOutcome.error) {
+    } else if (browserOutcome.error && !errors.some((e) => e.engine === "bing")) {
       errors.push({ engine: "bing", message: browserOutcome.error });
     }
   }
