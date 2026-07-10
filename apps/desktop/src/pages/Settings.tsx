@@ -5,6 +5,7 @@ import { SiteConnectorAgent, type SiteConnectionPlan } from "@aiia/agent-engine/
 import {
   DesktopOllamaClient,
   formatOllamaError,
+  OLLAMA_DOWNLOAD_URL,
   prepareOllamaForPlanner,
 } from "../ollama-desktop";
 import { api, type CredentialSummary, type OllamaSetupProgress, type UpdateStatus, type AppInfo } from "../api";
@@ -19,7 +20,7 @@ export function Settings() {
   const [setupProgress, setSetupProgress] = useState<OllamaSetupProgress | null>(null);
   const [settingUpOllama, setSettingUpOllama] = useState(false);
   const [setupError, setSetupError] = useState("");
-  const [hw, setHw] = useState<{ total_ram_gb: number; cpu_cores: number; profile: string } | null>(
+  const [hw, setHw] = useState<{ total_ram_gb: number; available_ram_gb?: number; cpu_cores: number; profile: string } | null>(
     null
   );
   const [dataDir, setDataDir] = useState("");
@@ -93,7 +94,7 @@ export function Settings() {
   const handleSetupOllama = async () => {
     setSettingUpOllama(true);
     setSetupError("");
-    setSetupProgress({ phase: "downloading", percent: 0, message: t("settings.ollamaSetupStarting") });
+    setSetupProgress({ phase: "starting", percent: 0, message: t("settings.ollamaSetupStarting") });
     try {
       const status = await api.setupOllama(true);
       setOllamaOk(status.running);
@@ -105,6 +106,10 @@ export function Settings() {
       setSettingUpOllama(false);
       setSetupProgress(null);
     }
+  };
+
+  const handleOpenOllamaDownload = () => {
+    void api.openUrl(OLLAMA_DOWNLOAD_URL);
   };
 
   const handleSaveRetention = async () => {
@@ -202,17 +207,30 @@ export function Settings() {
         </p>
         {!ollamaOk && (
           <div style={{ marginTop: "0.75rem" }}>
+            <p className="hint-text">{t("settings.ollamaManualHint")}</p>
+            <p className="hint-text">{t("settings.ollamaDefenderHint")}</p>
+            {!ollamaInstalled && (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={handleOpenOllamaDownload}
+                style={{ marginTop: "0.5rem", marginRight: "0.5rem" }}
+              >
+                {t("settings.ollamaOpenDownload")}
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-primary btn-sm"
               onClick={handleSetupOllama}
               disabled={settingUpOllama}
+              style={{ marginTop: "0.5rem" }}
             >
               {settingUpOllama
                 ? t("settings.ollamaSettingUp")
                 : ollamaInstalled
                   ? t("settings.ollamaStart")
-                  : t("settings.ollamaInstall")}
+                  : t("settings.ollamaCheckInstalled")}
             </button>
             {recommendedModel && (
               <p className="hint-text" style={{ marginTop: "0.5rem" }}>
@@ -235,7 +253,9 @@ export function Settings() {
         )}
         {hw && (
           <p>
-            {t("settings.hardware")}: {hw.profile} ({hw.total_ram_gb} GB RAM, {hw.cpu_cores} cores)
+            {t("settings.hardware")}: {hw.profile} ({hw.total_ram_gb} GB RAM
+            {hw.available_ram_gb != null ? `, ${hw.available_ram_gb} GB free` : ""}, {hw.cpu_cores}{" "}
+            cores)
           </p>
         )}
       </div>

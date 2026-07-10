@@ -23,6 +23,7 @@ import { useRunProgress } from "../hooks/useAgents";
 import {
   DesktopOllamaClient,
   formatOllamaError,
+  isOllamaNotInstalledError,
   prepareOllamaForPlanner,
   sanitizeOllamaProgressMessage,
 } from "../ollama-desktop";
@@ -43,6 +44,7 @@ export function CreateAgent() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [ollamaNeedsInstall, setOllamaNeedsInstall] = useState(false);
   const [ollamaSetup, setOllamaSetup] = useState<{ message: string; percent: number } | null>(
     null
   );
@@ -155,6 +157,7 @@ export function CreateAgent() {
     if (!prompt.trim()) return;
     setLoading(true);
     setError("");
+    setOllamaNeedsInstall(false);
     setOllamaSetup(null);
     let unlisten: (() => void) | undefined;
     try {
@@ -179,7 +182,12 @@ export function CreateAgent() {
       });
       setSpec(normalized);
     } catch (e) {
-      setError(formatOllamaError(e));
+      if (isOllamaNotInstalledError(e)) {
+        setOllamaNeedsInstall(true);
+        setError(t("create.ollamaNotInstalled"));
+      } else {
+        setError(formatOllamaError(e));
+      }
     } finally {
       unlisten?.();
       setOllamaSetup(null);
@@ -340,7 +348,21 @@ export function CreateAgent() {
         </div>
       </div>
 
-      {error && <p className="error-text">{error}</p>}
+      {error && (
+        <div>
+          <p className="error-text">{error}</p>
+          {ollamaNeedsInstall && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => navigate("/settings")}
+              style={{ marginTop: "0.5rem" }}
+            >
+              {t("create.goToSettings")}
+            </button>
+          )}
+        </div>
+      )}
 
       {ollamaSetup && (
         <div className="card" style={{ marginBottom: "1rem" }}>

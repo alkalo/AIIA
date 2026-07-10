@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ChatMessage, ChatOptions } from "@aiia/ollama-client/browser";
-import { modelForProfile } from "@aiia/ollama-client/browser";
+import { modelForProfile, modelIsAvailable } from "@aiia/ollama-client/browser";
 import { api } from "./api";
+
+export const OLLAMA_DOWNLOAD_URL = "https://ollama.com/download";
 
 /** Ollama client that routes all calls through Tauri (no webview fetch). */
 export class DesktopOllamaClient {
@@ -42,6 +44,16 @@ export function sanitizeOllamaProgressMessage(message: string): string {
     .trim();
 }
 
+export function isOllamaNotInstalledError(err: unknown): boolean {
+  const raw =
+    err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+  return (
+    /ollama no está instalado/i.test(raw) ||
+    /ollama is not installed/i.test(raw) ||
+    /ollama\.com\/download/i.test(raw)
+  );
+}
+
 export function formatOllamaError(err: unknown): string {
   const raw =
     err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
@@ -51,7 +63,7 @@ export function formatOllamaError(err: unknown): string {
   return raw;
 }
 
-/** Install/start Ollama and pull the planner model for this hardware profile. */
+/** Start Ollama and pull the planner model for this hardware profile (no silent installer). */
 export async function prepareOllamaForPlanner(profile: string): Promise<void> {
   await api.ensureOllamaForPlanner(profile);
 }
@@ -59,3 +71,5 @@ export async function prepareOllamaForPlanner(profile: string): Promise<void> {
 export function plannerModelForProfile(profile: string): string {
   return modelForProfile(profile, "planner");
 }
+
+export { modelIsAvailable };

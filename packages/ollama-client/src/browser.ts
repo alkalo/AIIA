@@ -216,3 +216,10 @@ export function modelForProfile(profile: string, role: "planner" | "extractor"):
   const [planner, extractor] = map[profile] ?? map.medium;
   return role === "planner" ? planner : extractor;
 }
+
+/** Exact tag match (ignores :latest suffix). */
+export function modelIsAvailable(models: string[], model: string): boolean {
+  return models.some(
+    (m) => m === model || m === `${model}:latest` || m.replace(/:latest$/, "") === model
+  );
+}

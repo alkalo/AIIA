@@ -69,13 +69,18 @@ fn ensure_agent_file(data_dir: &PathBuf, spec: &AgentSpec) -> Result<(), String>
     let agents_dir = data_dir.join("agents");
     std::fs::create_dir_all(&agents_dir).map_err(|e| e.to_string())?;
     let path = agents_dir.join(format!("{}.json", spec.id));
-    std::fs::write(&path, serde_json::to_string_pretty(spec).unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(spec).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[derive(Serialize)]
 pub struct HardwareInfoDto {
     pub total_ram_gb: u64,
+    pub available_ram_gb: u64,
     pub cpu_cores: usize,
     pub profile: String,
 }
@@ -83,6 +88,7 @@ pub struct HardwareInfoDto {
 #[tauri::command]
 fn get_hardware_info() -> HardwareInfoDto {
     let total = sysinfo_mem_gb();
+    let available = sysinfo_avail_mem_gb();
     let cores = std::thread::available_parallelism()
         .map(|p| p.get())
         .unwrap_or(4);
@@ -97,9 +103,41 @@ fn get_hardware_info() -> HardwareInfoDto {
     };
     HardwareInfoDto {
         total_ram_gb: total,
+        available_ram_gb: available,
         cpu_cores: cores,
         profile: profile.to_string(),
     }
+}
+
+fn sysinfo_avail_mem_gb() -> u64 {
+    #[cfg(windows)]
+    {
+        use std::mem::MaybeUninit;
+        #[repr(C)]
+        struct MemoryStatusEx {
+            dw_length: u32,
+            dw_memory_load: u32,
+            ull_total_phys: u64,
+            ull_avail_phys: u64,
+            ull_total_page_file: u64,
+            ull_avail_page_file: u64,
+            ull_total_virtual: u64,
+            ull_avail_virtual: u64,
+            ull_avail_extended_virtual: u64,
+        }
+        extern "system" {
+            fn GlobalMemoryStatusEx(lpBuffer: *mut MemoryStatusEx) -> i32;
+        }
+        let mut status = MaybeUninit::<MemoryStatusEx>::uninit();
+        unsafe {
+            let ptr = status.as_mut_ptr();
+            (*ptr).dw_length = std::mem::size_of::<MemoryStatusEx>() as u32;
+            if GlobalMemoryStatusEx(ptr) != 0 {
+                return (*ptr).ull_avail_phys / 1024 / 1024 / 1024;
+            }
+        }
+    }
+    sysinfo_mem_gb()
 }
 
 fn sysinfo_mem_gb() -> u64 {
@@ -150,11 +188,13 @@ async fn setup_ollama(
     state: State<'_, AppState>,
     pull_model: Option<bool>,
 ) -> Result<ollama::OllamaStatus, String> {
-    let ram = sysinfo_mem_gb();
+    let total = sysinfo_mem_gb();
+    let avail = sysinfo_avail_mem_gb();
     ollama::setup_ollama(
         app,
         state.data_dir.clone(),
-        ram,
+        total,
+        avail,
         pull_model.unwrap_or(true),
     )
     .await
@@ -166,8 +206,9 @@ async fn ensure_ollama_for_planner(
     state: State<'_, AppState>,
     profile: String,
 ) -> Result<ollama::OllamaStatus, String> {
-    let ram = sysinfo_mem_gb();
-    ollama::ensure_ollama_for_planner(app, state.data_dir.clone(), ram, &profile).await
+    let total = sysinfo_mem_gb();
+    let avail = sysinfo_avail_mem_gb();
+    ollama::ensure_ollama_for_planner(app, state.data_dir.clone(), total, avail, &profile).await
 }
 
 #[tauri::command]
@@ -176,8 +217,9 @@ async fn ensure_ollama_model(
     state: State<'_, AppState>,
     model: String,
 ) -> Result<ollama::OllamaStatus, String> {
-    let ram = sysinfo_mem_gb();
-    ollama::setup_ollama_with_model(app, state.data_dir.clone(), ram, &model, true).await
+    let total = sysinfo_mem_gb();
+    let avail = sysinfo_avail_mem_gb();
+    ollama::setup_ollama_with_model(app, state.data_dir.clone(), total, avail, &model, true).await
 }
 
 #[tauri::command]
@@ -551,8 +593,8 @@ fn remove_credential_index_entry(data_dir: &PathBuf, site_id: &str) -> Result<()
     let mut index: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&content).unwrap_or_default();
     index.remove(site_id);
-    std::fs::write(&index_path, serde_json::to_string_pretty(&index).unwrap())
-        .map_err(|e| e.to_string())
+    let json = serde_json::to_string_pretty(&index).map_err(|e| e.to_string())?;
+    std::fs::write(&index_path, json).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -969,11 +1011,12 @@ fn spawn_agent_run_worker(
             Ok(child) => {
                 let pid = child.id();
                 {
-                    let mut queue = run_queue.lock().expect("run queue lock");
-                    queue.active_pid = Some(pid);
-                    queue.active_run_id = Some(run_id.clone());
-                    queue.active_effort = Some(effort.clone());
-                    queue.active_started_at = Some(chrono::Utc::now().to_rfc3339());
+                    if let Ok(mut queue) = run_queue.lock() {
+                        queue.active_pid = Some(pid);
+                        queue.active_run_id = Some(run_id.clone());
+                        queue.active_effort = Some(effort.clone());
+                        queue.active_started_at = Some(chrono::Utc::now().to_rfc3339());
+                    }
                 }
                 let _ = db.save_run_log(&RunLog {
                     id: run_id.clone(),
@@ -994,10 +1037,10 @@ fn spawn_agent_run_worker(
                     }),
                 );
 
-                let was_cancelled = {
-                    let queue = run_queue.lock().expect("run queue lock");
-                    queue.cancelled_run_ids.contains(&run_id)
-                };
+                let was_cancelled = run_queue
+                    .lock()
+                    .map(|q| q.cancelled_run_ids.contains(&run_id))
+                    .unwrap_or(false);
 
                 let output = if was_cancelled {
                     kill_process_tree(pid);
@@ -1006,8 +1049,7 @@ fn spawn_agent_run_worker(
                     child.wait_with_output()
                 };
 
-                {
-                    let mut queue = run_queue.lock().expect("run queue lock");
+                if let Ok(mut queue) = run_queue.lock() {
                     queue.active_pid = None;
                     queue.active_run_id = None;
                     queue.active_effort = None;
@@ -1016,9 +1058,9 @@ fn spawn_agent_run_worker(
 
                 let cancelled = run_queue
                     .lock()
-                    .expect("run queue lock")
-                    .cancelled_run_ids
-                    .remove(&run_id);
+                    .ok()
+                    .map(|mut q| q.cancelled_run_ids.remove(&run_id))
+                    .unwrap_or(false);
 
                 match output {
                     Ok(out) => {
@@ -1071,7 +1113,10 @@ fn finish_run_and_start_next(
     completed_agent_id: &str,
 ) {
     let next = {
-        let mut queue = run_queue.lock().expect("run queue lock");
+        let mut queue = match run_queue.lock() {
+            Ok(q) => q,
+            Err(_) => return,
+        };
         if queue.active_agent_id.as_deref() == Some(completed_agent_id) {
             queue.active_agent_id = None;
         }
@@ -1079,8 +1124,7 @@ fn finish_run_and_start_next(
     };
 
     if let Some(queued) = next {
-        {
-            let mut queue = run_queue.lock().expect("run queue lock");
+        if let Ok(mut queue) = run_queue.lock() {
             queue.active_agent_id = Some(queued.agent_id.clone());
             queue.active_run_id = Some(queued.run_id.clone());
             queue.active_effort = Some(queued.effort.clone());

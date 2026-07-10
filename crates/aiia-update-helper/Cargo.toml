@@ -1,0 +1,9 @@
+[package]
+name = "aiia-update-helper"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal AIIA MSI installer helper (no PowerShell)"
+
+[[bin]]
+name = "aiia-update-helper"
+path = "src/main.rs"

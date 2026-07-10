@@ -1,23 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
+import { modelIsAvailable } from "@aiia/ollama-client/browser";
 import { api, type OllamaSetupProgress } from "../api";
+import { OLLAMA_DOWNLOAD_URL } from "../ollama-desktop";
 
 interface Props {
   onComplete: () => void;
 }
 
-type SetupPhase = "idle" | "checking" | "setup" | "ready" | "error";
+type SetupPhase = "idle" | "checking" | "needs_install" | "needs_prepare" | "setup" | "ready" | "error";
 
 export function Onboarding({ onComplete }: Props) {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<SetupPhase>("checking");
   const [ollamaOk, setOllamaOk] = useState(false);
+  const [ollamaInstalled, setOllamaInstalled] = useState(false);
   const [hw, setHw] = useState<string>("");
   const [recommendedModel, setRecommendedModel] = useState("");
   const [setupProgress, setSetupProgress] = useState<OllamaSetupProgress | null>(null);
   const [error, setError] = useState("");
-  const setupStarted = useRef(false);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -32,10 +34,9 @@ export function Onboarding({ onComplete }: Props) {
       }
 
       setPhase("checking");
-      let hwInfo: { total_ram_gb: number; profile: string } | null = null;
 
       try {
-        hwInfo = await api.getHardwareInfo();
+        const hwInfo = await api.getHardwareInfo();
         setHw(`${hwInfo.profile} (${hwInfo.total_ram_gb} GB)`);
       } catch {
         setHw("—");
@@ -44,21 +45,23 @@ export function Onboarding({ onComplete }: Props) {
       try {
         const status = await api.getOllamaStatus();
         setRecommendedModel(status.recommendedModel);
-        const hasModel = status.models.some((m) =>
-          m.startsWith(status.recommendedModel)
-        );
-        if (status.running && hasModel) {
+        setOllamaInstalled(status.installed);
+
+        const hasModel = modelIsAvailable(status.models, status.recommendedModel);
+        if (status.installed && status.running && hasModel) {
           setOllamaOk(true);
           setPhase("ready");
           return;
         }
-      } catch {
-        /* fall through to setup */
-      }
 
-      if (!setupStarted.current) {
-        setupStarted.current = true;
-        await startSetup();
+        if (!status.installed) {
+          setPhase("needs_install");
+          return;
+        }
+
+        setPhase("needs_prepare");
+      } catch {
+        setPhase("needs_install");
       }
     };
 
@@ -66,22 +69,26 @@ export function Onboarding({ onComplete }: Props) {
     return () => {
       unlisten?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startSetup = async () => {
+  const startPrepare = async () => {
     setPhase("setup");
     setError("");
-    setSetupProgress({ phase: "downloading", percent: 0, message: t("onboarding.setupStarting") });
+    setSetupProgress({ phase: "starting", percent: 0, message: t("onboarding.setupStarting") });
     try {
       const status = await api.setupOllama(true);
-      setOllamaOk(status.running);
+      setOllamaOk(status.running && modelIsAvailable(status.models, status.recommendedModel));
+      setOllamaInstalled(status.installed);
       setRecommendedModel(status.recommendedModel);
-      setPhase("ready");
+      setPhase(status.running ? "ready" : "needs_prepare");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase("error");
     }
+  };
+
+  const openOllamaDownload = () => {
+    void api.openUrl(OLLAMA_DOWNLOAD_URL);
   };
 
   const canContinue = phase === "ready" && ollamaOk;
@@ -106,6 +113,21 @@ export function Onboarding({ onComplete }: Props) {
           )}
         </ul>
 
+        {(phase === "needs_install" || phase === "needs_prepare") && (
+          <div className="onboarding-manual">
+            <p className="hint-text">{t("onboarding.manualHint")}</p>
+            <p className="hint-text">{t("onboarding.defenderHint")}</p>
+            {!ollamaInstalled && (
+              <button type="button" className="btn btn-outline" onClick={openOllamaDownload}>
+                {t("onboarding.openOllamaDownload")}
+              </button>
+            )}
+            <button type="button" className="btn btn-primary" onClick={startPrepare}>
+              {ollamaInstalled ? t("onboarding.prepareModels") : t("onboarding.checkInstalled")}
+            </button>
+          </div>
+        )}
+
         {phase === "setup" && setupProgress && (
           <div className="onboarding-progress">
             <p className="hint-text">{setupProgress.message}</p>
@@ -121,7 +143,7 @@ export function Onboarding({ onComplete }: Props) {
         {error && <p className="error-text">{error}</p>}
 
         {phase === "error" && (
-          <button type="button" className="btn btn-primary" onClick={startSetup}>
+          <button type="button" className="btn btn-primary" onClick={startPrepare}>
             {t("onboarding.retrySetup")}
           </button>
         )}

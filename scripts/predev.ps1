@@ -22,6 +22,13 @@ Write-Host "Compilando frontend..."
 npm run build -w @aiia/desktop
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+$UpdateHelper = Join-Path $Root "apps/desktop/src-tauri/update-helper/aiia-update-helper.exe"
+if (-not (Test-Path $UpdateHelper)) {
+    Write-Host "Empaquetando update-helper..."
+    node scripts/bundle-update-helper.mjs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 Write-Host "Iniciando watch del frontend en segundo plano..."
 Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev:watch","-w","@aiia/desktop" -WorkingDirectory $Root -WindowStyle Hidden
 

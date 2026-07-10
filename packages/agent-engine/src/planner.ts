@@ -4,6 +4,7 @@ import {
   detectHardware,
   type EffortLevel,
 } from "@aiia/ollama-client";
+import { modelIsAvailable } from "@aiia/ollama-client/browser";
 import type { AgentSpec, TemplateId, PromptAttachment } from "./types.js";
 import {
   applyPlannerDefaults,
@@ -25,7 +26,7 @@ export class PlannerAgent {
     const hw = await detectHardware();
     this.plannerModel = hw.plannerModel;
     const models = await this.ollama.listModels().catch(() => [] as string[]);
-    if (!models.some((m) => m.startsWith(this.plannerModel.split(":")[0]))) {
+    if (!modelIsAvailable(models, this.plannerModel)) {
       await this.ollama.pullModel(this.plannerModel);
     }
   }

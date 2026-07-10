@@ -38,7 +38,14 @@ npm run build:packages     # compilar packages TS
 - No añadir APIs de pago ni Google
 - Mantener todo en local
 
-## Oportunidades y subvenciones (grants)
+## Windows Defender y Ollama
+
+- **AIIA no instala Ollama en silencio** al pulsar «Generar agente». Ese flujo solo comprueba que Ollama esté instalado, lo inicia si hace falta y descarga el modelo vía API HTTP.
+- La **instalación de Ollama** es manual y con consentimiento del usuario: onboarding y Ajustes abren `https://ollama.com/download` y ofrecen «Comprobar y preparar» tras la instalación.
+- Si Windows Defender bloquea escritura o ejecución (`Acceso denegado`, error 5), la app muestra un mensaje accionable en lugar de cerrarse sin aviso.
+- **Exclusión opcional en Defender:** solo la carpeta de modelos Ollama (`%USERPROFILE%\.ollama`), no toda la app AIIA.
+- El **auto-update** usa `aiia-update-helper.exe` (Rust empaquetado), no scripts PowerShell con `-ExecutionPolicy Bypass`, `schtasks` ni `taskkill`.
+
 
 La plantilla `opportunities` admite subtipos vía `opportunitySubtype`:
 

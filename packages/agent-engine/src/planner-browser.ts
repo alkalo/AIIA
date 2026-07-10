@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   OllamaClient,
   modelForProfile,
+  modelIsAvailable,
   type EffortLevel,
 } from "@aiia/ollama-client/browser";
 import type { AgentSpec, TemplateId, PromptAttachment } from "./types.js";
@@ -29,11 +30,12 @@ export class PlannerAgent {
     this.plannerModel = modelForProfile(hwProfile, "planner");
   }
 
-  async init(): Promise<void> {
+  async init(skipModelPull = false): Promise<void> {
     const models = await this.ollama.listModels().catch(() => [] as string[]);
-    if (!models.some((m) => m.startsWith(this.plannerModel.split(":")[0]))) {
-      await this.ollama.pullModel(this.plannerModel);
+    if (skipModelPull || modelIsAvailable(models, this.plannerModel)) {
+      return;
     }
+    await this.ollama.pullModel(this.plannerModel);
   }
 
   async plan(
@@ -42,7 +44,7 @@ export class PlannerAgent {
     lang: "en" | "es" = "es",
     attachments: PromptAttachment[] = []
   ): Promise<AgentSpec> {
-    await this.init();
+    await this.init(true);
     const attachmentBlock = buildContextBlock(attachments);
     const numCtx = attachments.length > 0 ? 8192 : 4096;
 
@@ -110,7 +112,7 @@ export class PlannerAgent {
     spec: AgentSpec,
     feedback: { useful: string[]; notUseful: string[] }
   ): Promise<Partial<AgentSpec>> {
-    await this.init();
+    await this.init(true);
     const response = await this.ollama.chat(
       [
         { role: "system", content: "Suggest improvements to an AgentSpec based on user feedback. Output JSON with only changed fields." },

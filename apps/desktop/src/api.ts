@@ -24,6 +24,7 @@ export interface ResultRecord {
 
 export interface HardwareInfo {
   total_ram_gb: number;
+  available_ram_gb: number;
   cpu_cores: number;
   profile: string;
 }

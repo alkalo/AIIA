@@ -1,11 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-const OLLAMA_SETUP_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
+const OLLAMA_DOWNLOAD_PAGE: &str = "https://ollama.com/download";
 const OLLAMA_API: &str = "http://127.0.0.1:11434";
+
+pub const OLLAMA_NOT_INSTALLED: &str = "Ollama no está instalado. Descárgalo desde https://ollama.com/download, instálalo y vuelve a intentarlo desde Ajustes.";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +89,34 @@ pub fn recommended_model(total_ram_gb: u64) -> String {
     } else {
         "llama3.2:1b".to_string()
     }
+}
+
+fn map_io_error(err: &std::io::Error) -> String {
+    let raw = err.to_string();
+    if err.raw_os_error() == Some(5)
+        || raw.contains("Acceso denegado")
+        || raw.contains("Access is denied")
+        || raw.contains("0x80070005")
+    {
+        return "Windows Defender o permisos bloquearon la operación. Instala Ollama manualmente desde https://ollama.com/download.".to_string();
+    }
+    raw
+}
+
+pub fn planner_model_for_hw(total_ram_gb: u64, avail_ram_gb: u64, profile: &str) -> String {
+    let by_profile = planner_model_for_profile(profile);
+    let by_total = recommended_model(total_ram_gb);
+    let mut model = if model_size_rank(&by_total) < model_size_rank(&by_profile) {
+        by_total
+    } else {
+        by_profile
+    };
+    if avail_ram_gb < 6 {
+        model = "qwen2.5:3b".to_string();
+    } else if avail_ram_gb < 10 && model_size_rank(&model) > model_size_rank("qwen2.5:7b") {
+        model = "qwen2.5:7b".to_string();
+    }
+    model
 }
 
 pub fn planner_model_for_profile(profile: &str) -> String {
@@ -222,7 +252,7 @@ fn start_ollama() -> Result<(), String> {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("No se pudo iniciar Ollama: {e}"))?;
+            .map_err(|e| map_io_error(&e))?;
         return Ok(());
     }
     if let Some(exe) = ollama_exe_path() {
@@ -232,7 +262,7 @@ fn start_ollama() -> Result<(), String> {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("No se pudo iniciar ollama serve: {e}"))?;
+            .map_err(|e| map_io_error(&e))?;
         return Ok(());
     }
     #[cfg(not(windows))]
@@ -271,58 +301,94 @@ async fn wait_for_ollama(app: &AppHandle, timeout: Duration) -> Result<(), Strin
     Err("Ollama no respondió a tiempo. Reinicia la app o inicia Ollama manualmente.".to_string())
 }
 
-async fn download_installer(dest: &Path, app: &AppHandle) -> Result<(), String> {
-    emit_progress(app, "downloading", 0, "Descargando Ollama…");
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(600))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let response = client
-        .get(OLLAMA_SETUP_URL)
-        .send()
-        .await
-        .map_err(|e| format!("Error al descargar Ollama: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Descarga fallida (HTTP {})",
-            response.status().as_u16()
-        ));
+async fn ensure_ollama_running(app: &AppHandle) -> Result<(), String> {
+    if ollama_is_running().await {
+        return Ok(());
     }
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Error leyendo la descarga: {e}"))?;
-
-    emit_progress(app, "downloading", 100, "Descarga completada");
-
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    if ollama_exe_path().is_none() {
+        return Err(OLLAMA_NOT_INSTALLED.to_string());
     }
-    std::fs::write(dest, &bytes).map_err(|e| format!("No se pudo guardar el instalador: {e}"))?;
-    Ok(())
+    start_ollama()?;
+    wait_for_ollama(app, Duration::from_secs(90)).await
 }
 
-fn run_installer(installer: &Path, app: &AppHandle) -> Result<(), String> {
-    emit_progress(app, "installing", 0, "Instalando Ollama…");
-
-    let status = Command::new(installer)
-        .args(["/VERYSILENT", "/NORESTART", "/SP-"])
-        .status()
-        .map_err(|e| format!("No se pudo ejecutar el instalador: {e}"))?;
-
-    if !status.success() {
-        return Err(format!(
-            "El instalador de Ollama terminó con código {}",
-            status.code().unwrap_or(-1)
-        ));
+async fn prepare_model_if_needed(
+    app: &AppHandle,
+    model: &str,
+    pull_if_missing: bool,
+) -> Result<Vec<String>, String> {
+    ensure_ollama_running(app).await?;
+    let mut models = list_models().await;
+    if pull_if_missing && !model_is_available(&models, model) {
+        pull_model(app, model).await?;
+        models = list_models().await;
     }
+    Ok(models)
+}
 
-    emit_progress(app, "installing", 100, "Instalación completada");
-    Ok(())
+pub async fn setup_ollama(
+    app: AppHandle,
+    _data_dir: PathBuf,
+    total_ram_gb: u64,
+    avail_ram_gb: u64,
+    pull_model_if_missing: bool,
+) -> Result<OllamaStatus, String> {
+    let model = recommended_model(total_ram_gb);
+    prepare_ollama(app, total_ram_gb, avail_ram_gb, &model, pull_model_if_missing).await
+}
+
+pub async fn prepare_ollama(
+    app: AppHandle,
+    total_ram_gb: u64,
+    avail_ram_gb: u64,
+    model: &str,
+    pull_if_missing: bool,
+) -> Result<OllamaStatus, String> {
+    if ollama_exe_path().is_none() {
+        return Err(OLLAMA_NOT_INSTALLED.to_string());
+    }
+    emit_progress(&app, "starting", 0, "Comprobando Ollama…");
+    let models = prepare_model_if_needed(&app, model, pull_if_missing).await?;
+    emit_progress(&app, "done", 100, "Ollama listo");
+    Ok(OllamaStatus {
+        installed: true,
+        running: true,
+        models,
+        recommended_model: planner_model_for_hw(total_ram_gb, avail_ram_gb, "medium"),
+    })
+}
+
+pub async fn setup_ollama_with_model(
+    app: AppHandle,
+    _data_dir: PathBuf,
+    total_ram_gb: u64,
+    avail_ram_gb: u64,
+    model: &str,
+    pull_model_if_missing: bool,
+) -> Result<OllamaStatus, String> {
+    prepare_ollama(app, total_ram_gb, avail_ram_gb, model, pull_model_if_missing).await
+}
+
+pub async fn ensure_ollama_for_planner(
+    app: AppHandle,
+    _data_dir: PathBuf,
+    total_ram_gb: u64,
+    avail_ram_gb: u64,
+    profile: &str,
+) -> Result<OllamaStatus, String> {
+    if ollama_exe_path().is_none() {
+        return Err(OLLAMA_NOT_INSTALLED.to_string());
+    }
+    let model = planner_model_for_hw(total_ram_gb, avail_ram_gb, profile);
+    emit_progress(&app, "starting", 0, "Preparando IA local…");
+    let models = prepare_model_if_needed(&app, &model, true).await?;
+    emit_progress(&app, "done", 100, "Listo para generar agente");
+    Ok(OllamaStatus {
+        installed: true,
+        running: true,
+        models,
+        recommended_model: model,
+    })
 }
 
 async fn pull_model(app: &AppHandle, model: &str) -> Result<(), String> {
@@ -387,9 +453,27 @@ async fn pull_model(app: &AppHandle, model: &str) -> Result<(), String> {
 }
 
 fn model_is_available(models: &[String], model: &str) -> bool {
-    models
-        .iter()
-        .any(|m| m == model || m.starts_with(&format!("{model}:")) || m.starts_with(model))
+    models.iter().any(|m| {
+        m == model
+            || m == &format!("{model}:latest")
+            || m.strip_suffix(":latest") == Some(model)
+    })
+}
+
+fn model_size_rank(model: &str) -> u8 {
+    if model.contains("14b") {
+        3
+    } else if model.contains("7b") {
+        2
+    } else if model.contains("3b") {
+        1
+    } else {
+        0
+    }
+}
+
+pub fn ollama_download_page() -> &'static str {
+    OLLAMA_DOWNLOAD_PAGE
 }
 
 pub async fn ollama_chat(
@@ -444,108 +528,4 @@ pub async fn ollama_chat(
         .and_then(|c| c.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "Ollama devolvió una respuesta vacía".to_string())
-}
-
-pub async fn setup_ollama(
-    app: AppHandle,
-    data_dir: PathBuf,
-    total_ram_gb: u64,
-    pull_model_if_missing: bool,
-) -> Result<OllamaStatus, String> {
-    setup_ollama_with_model(
-        app,
-        data_dir,
-        total_ram_gb,
-        &recommended_model(total_ram_gb),
-        pull_model_if_missing,
-    )
-    .await
-}
-
-pub async fn setup_ollama_with_model(
-    app: AppHandle,
-    data_dir: PathBuf,
-    total_ram_gb: u64,
-    model: &str,
-    pull_model_if_missing: bool,
-) -> Result<OllamaStatus, String> {
-    let model = model.to_string();
-
-    if ollama_is_running().await {
-        let models = list_models().await;
-        if !pull_model_if_missing || model_is_available(&models, &model) {
-            emit_progress(&app, "done", 100, "Ollama listo");
-            return Ok(OllamaStatus {
-                installed: true,
-                running: true,
-                models,
-                recommended_model: recommended_model(total_ram_gb),
-            });
-        }
-        pull_model(&app, &model).await?;
-        let models = list_models().await;
-        emit_progress(&app, "done", 100, "Ollama listo");
-        return Ok(OllamaStatus {
-            installed: true,
-            running: true,
-            models,
-            recommended_model: recommended_model(total_ram_gb),
-        });
-    }
-
-    if ollama_exe_path().is_none() {
-        let installer = data_dir.join("installers").join("OllamaSetup.exe");
-        download_installer(&installer, &app).await?;
-        run_installer(&installer, &app)?;
-        let _ = std::fs::remove_file(&installer);
-    } else {
-        emit_progress(&app, "installing", 100, "Ollama ya instalado");
-    }
-
-    if !ollama_is_running().await {
-        start_ollama()?;
-        wait_for_ollama(&app, Duration::from_secs(90)).await?;
-    }
-
-    let mut models = list_models().await;
-    if pull_model_if_missing && !model_is_available(&models, &model) {
-        pull_model(&app, &model).await?;
-        models = list_models().await;
-    }
-
-    emit_progress(&app, "done", 100, "Ollama listo");
-    Ok(OllamaStatus {
-        installed: true,
-        running: true,
-        models,
-        recommended_model: recommended_model(total_ram_gb),
-    })
-}
-
-pub async fn ensure_ollama_for_planner(
-    app: AppHandle,
-    data_dir: PathBuf,
-    total_ram_gb: u64,
-    profile: &str,
-) -> Result<OllamaStatus, String> {
-    let by_profile = planner_model_for_profile(profile);
-    let by_ram = recommended_model(total_ram_gb);
-    let model = if model_size_rank(&by_ram) < model_size_rank(&by_profile) {
-        by_ram
-    } else {
-        by_profile
-    };
-    setup_ollama_with_model(app, data_dir, total_ram_gb, &model, true).await
-}
-
-fn model_size_rank(model: &str) -> u8 {
-    if model.contains("14b") {
-        3
-    } else if model.contains("7b") {
-        2
-    } else if model.contains("3b") {
-        1
-    } else {
-        0
-    }
 }
