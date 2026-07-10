@@ -62,6 +62,10 @@ export function Dashboard() {
     listen<{ agentId?: string; count?: number; summary?: string }>("agent-run-complete", (event) => {
       setRunInProgress(false);
       setLastRunComplete(event.payload);
+      const agentId = event.payload.agentId;
+      if (agentId) {
+        void api.syncLatestRunResults(agentId).catch(() => undefined);
+      }
       refresh({ silent: true });
       api.getAgentLimits().then(setAgentLimits).catch(() => {});
     }).then((fn) => unsubs.push(fn));

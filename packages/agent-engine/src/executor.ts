@@ -50,6 +50,67 @@ import { grantExpansionQueries } from "./grant-sources.js";
 import { isGrantTarget } from "./opportunity-subtype.js";
 import { sortByDeadlineAsc } from "./deadline.js";
 
+const GRANT_WAVE_FALLBACKS = [
+  "community grant australia open deadline",
+  "frrr funding grant application australia",
+  "new zealand community wellbeing grant",
+  "global community wellbeing grant application",
+  "site:communitygrants.gov.au grant open",
+  "site:frrr.org.au funding grant",
+];
+
+function resolveWaveQueries(
+  spec: AgentSpec,
+  wave: number,
+  queries: string[],
+  pendingNewQueries: string[],
+  usedQueries: Set<string>,
+  perWaveTarget: number,
+  longMode: boolean
+): string[] {
+  if (wave === 0) return queries;
+
+  const fromCoverage = pendingNewQueries.filter((q) => !usedQueries.has(q.trim().toLowerCase()));
+  const need = Math.max(0, perWaveTarget - fromCoverage.length);
+  const sector = [
+    ...sectorExpansionQueries(spec, usedQueries, need),
+    ...grantExpansionQueries(spec, usedQueries, need),
+  ];
+  let waveQueries = [...new Set([...fromCoverage, ...sector])];
+
+  if (waveQueries.length === 0 && longMode) {
+    waveQueries = broadenQueries(queries, spec.prompt, spec).filter(
+      (q) => !usedQueries.has(q.trim().toLowerCase())
+    );
+  }
+  if (waveQueries.length === 0 && isGrantTarget(spec)) {
+    waveQueries = GRANT_WAVE_FALLBACKS.filter((q) => !usedQueries.has(q.trim().toLowerCase())).slice(
+      0,
+      perWaveTarget
+    );
+  }
+  return waveQueries;
+}
+
+function shouldStopForEmptyWaves(
+  longMode: boolean,
+  emptyWaves: number,
+  startTime: number,
+  profile: ResearchProfile,
+  rankedCount: number,
+  maxSources: number
+): boolean {
+  const threshold = longMode ? 8 : 2;
+  if (emptyWaves < threshold) return false;
+  if (!longMode) return true;
+  const elapsed = budgetElapsedSec(startTime);
+  const searchBudget = profile.wallClockBudgetSec * 0.85;
+  if (elapsed < searchBudget && rankedCount < maxSources && budgetPhase(startTime, profile) !== "critical") {
+    return false;
+  }
+  return true;
+}
+
 export type ProgressCallback = (event: ProgressEvent) => void;
 
 export class Executor {
@@ -258,19 +319,37 @@ export class Executor {
       if (wave === 0) {
         waveQueries = queries;
       } else {
-        const fromCoverage = pendingNewQueries.filter(
-          (q) => !usedQueries.has(q.trim().toLowerCase())
+        waveQueries = resolveWaveQueries(
+          spec,
+          wave,
+          queries,
+          pendingNewQueries,
+          usedQueries,
+          perWaveTarget,
+          longMode
         );
-        const need = Math.max(0, perWaveTarget - fromCoverage.length);
-        const sector = [
-          ...sectorExpansionQueries(spec, usedQueries, need),
-          ...grantExpansionQueries(spec, usedQueries, need),
-        ];
-        waveQueries = [...new Set([...fromCoverage, ...sector])];
         pendingNewQueries = [];
       }
 
-      if (waveQueries.length === 0) break;
+      if (waveQueries.length === 0) {
+        if (longMode && !shouldStopWaves(startTime, profile, wave)) {
+          log(
+            LogAction.INFO,
+            "Sin consultas nuevas — ampliando con fallback",
+            undefined,
+            "searching"
+          );
+          waveQueries = broadenQueries(queries, spec.prompt, spec)
+            .filter((q) => !usedQueries.has(q.trim().toLowerCase()))
+            .slice(0, perWaveTarget);
+        }
+        if (waveQueries.length === 0 && isGrantTarget(spec)) {
+          waveQueries = GRANT_WAVE_FALLBACKS.filter(
+            (q) => !usedQueries.has(q.trim().toLowerCase())
+          ).slice(0, perWaveTarget);
+        }
+        if (waveQueries.length === 0) break;
+      }
       registerUsed(waveQueries);
 
       if (wave > 0) {
@@ -363,8 +442,13 @@ export class Executor {
 
       const gained = rankedSources.length - beforeCount;
       emptyWaves = gained > 0 ? 0 : emptyWaves + 1;
-      // Detener si varias olas seguidas no aportan nada nuevo (fuentes agotadas).
-      if (emptyWaves >= (longMode ? 5 : 2)) {
+      log(
+        LogAction.INFO,
+        `Ola ${wave + 1} — +${gained} fuentes (${rankedSources.length}/${maxSources} total, ${budgetElapsedSec(startTime)}s)`,
+        `Consultas: ${waveQueries.length} · sin progreso: ${emptyWaves} olas seguidas`,
+        "searching"
+      );
+      if (shouldStopForEmptyWaves(longMode, emptyWaves, startTime, profile, rankedSources.length, maxSources)) {
         log(LogAction.INFO, `Sin fuentes nuevas en ${emptyWaves} olas — fin de búsqueda`, undefined, "searching");
         break;
       }
@@ -646,7 +730,10 @@ export class Executor {
     const pending = queries.filter(Boolean);
     const perQuery = perQueryLimit(limit, searchLimits.maxResultsPerQuery, pending.length);
 
-    const batches = await mapPool(pending, profile.parallelSearch, async (query) => {
+    const searchConcurrency =
+      profile.searchWaves >= 8 ? 1 : Math.max(1, profile.parallelSearch);
+
+    const batches = await mapPool(pending, searchConcurrency, async (query) => {
       const batch: SearchResult[] = [];
       for (const source of spec.search.sources) {
         if (source.type !== "duckduckgo") continue;

@@ -83,7 +83,7 @@ export const RESEARCH_PROFILES: Record<EffortLevel, ResearchProfile> = {
     extractPolicy: "all_ranked",
     extractTopK: 60,
     fetchRatio: 0.75,
-    parallelSearch: 4,
+    parallelSearch: 1,
     parallelExtract: 3,
     gapAnalysis: true,
     useCritic: true,
@@ -100,7 +100,7 @@ export const RESEARCH_PROFILES: Record<EffortLevel, ResearchProfile> = {
     extractPolicy: "all_ranked",
     extractTopK: 100,
     fetchRatio: 0.9,
-    parallelSearch: 4,
+    parallelSearch: 1,
     parallelExtract: 4,
     gapAnalysis: true,
     useCritic: true,
@@ -197,7 +197,7 @@ export function shouldStopWaves(startTimeMs: number, profile: ResearchProfile, w
   // aprovechar casi todo el tiempo buscando muchas fuentes del sector).
   const elapsed = (Date.now() - startTimeMs) / 1000;
   const ratio = elapsed / profile.wallClockBudgetSec;
-  const searchBudgetRatio = profile.searchWaves >= 8 ? 0.8 : 0.7;
+  const searchBudgetRatio = profile.searchWaves >= 8 ? 0.9 : 0.7;
   if (ratio >= searchBudgetRatio) return true;
   return waveIndex >= profile.searchWaves;
 }

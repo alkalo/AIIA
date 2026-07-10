@@ -149,6 +149,10 @@ If coverage is good enough, sufficient=true and newQueries=[]. Return ONLY JSON.
         : [],
     };
   } catch {
-    return { sufficient: true, gaps: [], newQueries: [] };
+    const fallback = [
+      `${spec.prompt.slice(0, 100)} grant open deadline`,
+      `${spec.prompt.slice(0, 80)} funding opportunity`,
+    ].filter((q) => q.trim().length > 8);
+    return { sufficient: false, gaps: ["coverage analysis failed"], newQueries: fallback };
   }
 }

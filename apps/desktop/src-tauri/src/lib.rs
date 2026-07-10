@@ -345,6 +345,7 @@ fn sync_run_results_from_disk(
     agent_id: Option<&str>,
 ) -> Result<i32, String> {
     let mut total = 0i32;
+    let mut run_agents: HashMap<String, String> = HashMap::new();
 
     let runs_dir = data_dir.join("runs");
     if runs_dir.exists() {
@@ -369,23 +370,15 @@ fn sync_run_results_from_disk(
                 }
             }
             let Some(aid) = file_agent else { continue };
-            let Some(results) = parsed.get("results").and_then(|r| r.as_array()) else {
-                continue;
-            };
-            if results.is_empty() {
-                continue;
-            }
             let run_id = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            if db.count_results_for_run(&run_id).unwrap_or(0) > 0 {
+            if run_id.is_empty() {
                 continue;
             }
-            total += db
-                .save_results(aid, &run_id, results)
-                .map_err(|e| e.to_string())?;
+            run_agents.insert(run_id, aid.to_string());
         }
     }
 
@@ -416,31 +409,32 @@ fn sync_run_results_from_disk(
                 {
                     continue;
                 }
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-                    continue;
-                };
-                let Some(results) = parsed.get("results").and_then(|r| r.as_array()) else {
-                    continue;
-                };
-                if results.is_empty() {
-                    continue;
-                }
                 let run_id = path
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
                     .to_string();
-                if db.count_results_for_run(&run_id).unwrap_or(0) > 0 {
+                if run_id.is_empty() {
                     continue;
                 }
-                total += db
-                    .save_results(&aid, &run_id, results)
-                    .map_err(|e| e.to_string())?;
+                run_agents.entry(run_id).or_insert_with(|| aid.clone());
             }
         }
+    }
+
+    for (run_id, aid) in run_agents {
+        if db.count_results_for_run(&run_id).unwrap_or(0) > 0 {
+            continue;
+        }
+        let Some(results) = best_run_results(data_dir, &aid, &run_id) else {
+            continue;
+        };
+        if results.is_empty() {
+            continue;
+        }
+        total += db
+            .save_results(&aid, &run_id, &results)
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(total)
@@ -453,17 +447,11 @@ fn list_results(
     limit: Option<i32>,
 ) -> Result<Vec<ResultRecord>, String> {
     let limit = limit.unwrap_or(100);
-    let mut results = state
+    let _ = sync_run_results_from_disk(&state.db, &state.data_dir, agent_id.as_deref());
+    let results = state
         .db
         .list_results(agent_id.as_deref(), limit)
         .map_err(|e| e.to_string())?;
-    if results.is_empty() {
-        let _ = sync_run_results_from_disk(&state.db, &state.data_dir, agent_id.as_deref());
-        results = state
-            .db
-            .list_results(agent_id.as_deref(), limit)
-            .map_err(|e| e.to_string())?;
-    }
     Ok(results)
 }
 
@@ -1297,15 +1285,31 @@ fn read_inbox_run_results(
     parsed.get("results").and_then(|r| r.as_array()).cloned()
 }
 
+fn best_run_results(
+    data_dir: &PathBuf,
+    agent_id: &str,
+    run_id: &str,
+) -> Option<Vec<serde_json::Value>> {
+    let from_runs = read_run_results(data_dir, run_id).unwrap_or_default();
+    let from_inbox = read_inbox_run_results(data_dir, agent_id, run_id).unwrap_or_default();
+    if from_inbox.len() >= from_runs.len() && !from_inbox.is_empty() {
+        Some(from_inbox)
+    } else if !from_runs.is_empty() {
+        Some(from_runs)
+    } else if !from_inbox.is_empty() {
+        Some(from_inbox)
+    } else {
+        None
+    }
+}
+
 fn persist_run_results(
     db: &Arc<Database>,
     agent_id: &str,
     run_id: &str,
     data_dir: &PathBuf,
 ) -> i32 {
-    let results = read_run_results(data_dir, run_id)
-        .or_else(|| read_inbox_run_results(data_dir, agent_id, run_id))
-        .filter(|r| !r.is_empty());
+    let results = best_run_results(data_dir, agent_id, run_id).filter(|r| !r.is_empty());
     if let Some(items) = results {
         match db.save_results(agent_id, run_id, &items) {
             Ok(n) => {
@@ -1345,8 +1349,7 @@ fn finalize_agent_run(
 ) {
     let parsed = parse_runner_stdout(stdout);
     let run_file = read_run_file(data_dir, run_id);
-    let file_results = read_run_results(data_dir, run_id)
-        .or_else(|| read_inbox_run_results(data_dir, agent_id, run_id));
+    let file_results = best_run_results(data_dir, agent_id, run_id);
     let count = file_results.as_ref().map(|r| r.len()).unwrap_or(0);
     let summary = parsed
         .as_ref()
@@ -1370,6 +1373,15 @@ fn finalize_agent_run(
             0
         };
         let effective_count = if saved > 0 { saved as usize } else { count };
+        if count > 0 && saved == 0 {
+            let err = format!(
+                "Run produced {count} results on disk but failed to save to inbox database"
+            );
+            eprintln!("AIIA: {err}");
+            let _ = db.set_agent_error(agent_id, &err);
+            let _ = app.emit("agent-run-error", err);
+            return;
+        }
         let _ = db.update_next_run(
             agent_id,
             db.get_agent(agent_id)

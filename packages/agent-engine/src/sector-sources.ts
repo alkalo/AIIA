@@ -1,5 +1,5 @@
 import type { AgentSpec } from "./types.js";
-import { isJobTarget } from "./search-quality.js";
+import { isGrantTarget, isJobTarget } from "./opportunity-subtype.js";
 
 const STOP_WORDS = new Set([
   "de", "la", "el", "en", "un", "una", "del", "los", "las", "por", "con", "para",
@@ -109,6 +109,7 @@ export function sectorExpansionQueries(
   count: number
 ): string[] {
   if (count <= 0) return [];
+  if (isGrantTarget(spec) || !isJobTarget(spec)) return [];
   const core = coreKeywords(spec);
   if (!core) return [];
 

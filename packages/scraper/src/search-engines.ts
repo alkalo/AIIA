@@ -415,56 +415,67 @@ async function runEngine(engineId: SearchEngineId, query: string, max: number): 
   });
 }
 
+/** Serializa búsquedas Playwright (un solo contexto Bing a la vez). */
+let browserSearchChain: Promise<unknown> = Promise.resolve();
+
+function withBrowserSearchLock<T>(task: () => Promise<T>): Promise<T> {
+  const run = browserSearchChain.then(() => task());
+  browserSearchChain = run.catch(() => {});
+  return run;
+}
+
 /** Bing vía Playwright cuando el fetch HTTP devuelve HTML sin resultados o bloqueos. */
 async function searchBingWithBrowser(query: string, max: number): Promise<EngineOutcome> {
-  try {
-    const browser = await getBrowser(true);
-    const context = await browser.newContext({ userAgent: USER_AGENT, locale: "en-AU" });
-    const page = await context.newPage();
+  return withBrowserSearchLock(async () => {
     try {
-      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en&count=${Math.min(30, max + 5)}`;
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-      await page.waitForSelector("li.b_algo h2 a", { timeout: 15000 }).catch(() => {});
-      await page.waitForTimeout(2000);
+      const browser = await getBrowser(true);
+      const context = await browser.newContext({ userAgent: USER_AGENT, locale: "en-AU" });
+      const page = await context.newPage();
+      try {
+        const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en&count=${Math.min(30, max + 5)}`;
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+        await page.waitForSelector("li.b_algo h2 a", { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(2000);
 
-      const raw = await page.locator("li.b_algo").evaluateAll((items, maxN) => {
-        const out: { title: string; url: string; snippet: string }[] = [];
-        for (const li of items.slice(0, maxN as number)) {
-          const a = li.querySelector("h2 a");
-          if (!a) continue;
-          const p = li.querySelector("p");
-          const title = a.textContent?.trim() ?? "";
-          const href = (a as HTMLAnchorElement).href ?? "";
-          if (!title || !href) continue;
-          out.push({
-            title,
-            url: href,
-            snippet: p?.textContent?.trim()?.slice(0, 500) ?? "",
-          });
+        const raw = await page.locator("li.b_algo").evaluateAll((items, maxN) => {
+          const out: { title: string; url: string; snippet: string }[] = [];
+          for (const li of items.slice(0, maxN as number)) {
+            const a = li.querySelector("h2 a");
+            if (!a) continue;
+            const p = li.querySelector("p");
+            const title = a.textContent?.trim() ?? "";
+            const href = (a as HTMLAnchorElement).href ?? "";
+            if (!title || !href) continue;
+            out.push({
+              title,
+              url: href,
+              snippet: p?.textContent?.trim()?.slice(0, 500) ?? "",
+            });
+          }
+          return out;
+        }, max);
+
+        const results = raw
+          .map((r) => ({
+            title: r.title,
+            url: normalizeUrl(r.url),
+            snippet: r.snippet,
+            engine: "bing" as const,
+          }))
+          .filter((r) => r.title && isValidResultUrl(r.url));
+
+        if (results.length === 0) {
+          return { results: [], error: "bing: browser fallback sin resultados", retryable: false };
         }
-        return out;
-      }, max);
-
-      const results = raw
-        .map((r) => ({
-          title: r.title,
-          url: normalizeUrl(r.url),
-          snippet: r.snippet,
-          engine: "bing" as const,
-        }))
-        .filter((r) => r.title && isValidResultUrl(r.url));
-
-      if (results.length === 0) {
-        return { results: [], error: "bing: browser fallback sin resultados", retryable: false };
+        return { results };
+      } finally {
+        await context.close();
       }
-      return { results };
-    } finally {
-      await context.close();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { results: [], error: `bing: browser fallback — ${msg}`, retryable: true };
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { results: [], error: `bing: browser fallback — ${msg}`, retryable: true };
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------

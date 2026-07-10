@@ -34,13 +34,10 @@ export function Inbox() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      let data = await api.listResults(filterAgent || undefined, 200);
-      if (data.length === 0) {
-        if (filterAgent) {
-          await api.syncLatestRunResults(filterAgent);
-        }
-        data = await api.listResults(filterAgent || undefined, 200);
+      if (filterAgent) {
+        await api.syncLatestRunResults(filterAgent);
       }
+      const data = await api.listResults(filterAgent || undefined, 200);
       setResults(data);
     } catch {
       setResults([]);
@@ -55,8 +52,13 @@ export function Inbox() {
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
-    listen("agent-run-complete", () => {
-      refresh();
+    listen<{ agentId?: string }>("agent-run-complete", (event) => {
+      const agentId = event.payload.agentId;
+      if (agentId) {
+        void api.syncLatestRunResults(agentId).then(() => refresh());
+      } else {
+        refresh();
+      }
     }).then((fn) => unsubs.push(fn));
     return () => unsubs.forEach((fn) => fn());
   }, [refresh]);
