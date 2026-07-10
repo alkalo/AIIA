@@ -1,6 +1,6 @@
 {
   "name": "aiia",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "description": "AIIA - Local AI agents for search and data collection",
   "workspaces": [

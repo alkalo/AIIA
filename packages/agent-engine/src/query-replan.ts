@@ -63,7 +63,10 @@ export function queriesAreStale(spec: AgentSpec): boolean {
 }
 
 function isSpanish(text: string): boolean {
-  return /(?:ción|empleo|ofertas|buscar|remoto|españa)/i.test(text);
+  if (/australia|australian|au\b|nz\b|new zealand|global|international/i.test(text)) {
+    return false;
+  }
+  return /(?:ción|empleo|ofertas|buscar|remoto|españa|subvenc)/i.test(text);
 }
 
 /** Consultas concretas sin IA a partir del prompt */
@@ -122,14 +125,14 @@ export async function replanSearchQueries(
         [
           {
             role: "system",
-            content: `Generate ${Math.max(2, cfgQueryExpansion + 1)} specific web search queries for DuckDuckGo/Bing. Each query MUST include key terms from the user goal. Use site: operators for relevant portals. Return ONLY a JSON array of strings.`,
+            content: `Generate ${Math.max(2, cfgQueryExpansion + 1)} specific web search queries for DuckDuckGo/Bing. Each query MUST include key terms from the user goal. Use site: operators for relevant portals. Prefer English queries for Australia/New Zealand/global grant portals even if the goal is written in Spanish. Return ONLY a JSON array of strings.`,
           },
           {
             role: "user",
             content: `Goal: ${spec.prompt}\nCriteria: ${spec.filters.criteria}\nTemplate: ${resolveTemplateId((spec.templateId ?? "custom") as TemplateId)}\nAvoid generic queries like "empleo" or "jobs remote" alone.`,
           },
         ],
-        { model: plannerModel, temperature: 0.35, format: "json", numCtx: 4096 }
+        { model: plannerModel, temperature: 0.35, format: "json", numCtx: 4096, timeoutMs: 90_000 }
       );
       const parsed = coerceJsonArray<unknown>(response);
       const ai = parsed.filter((q): q is string => typeof q === "string" && q.trim().length > 3);

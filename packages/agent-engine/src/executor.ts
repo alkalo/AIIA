@@ -57,7 +57,30 @@ const GRANT_WAVE_FALLBACKS = [
   "global community wellbeing grant application",
   "site:communitygrants.gov.au grant open",
   "site:frrr.org.au funding grant",
+  "site:grants.gov.au open grant community",
+  "site:business.gov.au grants community wellbeing",
+  "philanthropy australia community grant open",
+  "new zealand lottery grants board community",
 ];
+
+function heuristicCoverageQueries(
+  spec: AgentSpec,
+  usedQueries: Set<string>,
+  count: number
+): string[] {
+  const fromGrant = grantExpansionQueries(spec, usedQueries, count);
+  if (fromGrant.length > 0) return fromGrant;
+  if (isGrantTarget(spec)) {
+    return GRANT_WAVE_FALLBACKS.filter((q) => !usedQueries.has(q.trim().toLowerCase())).slice(0, count);
+  }
+  return broadenQueries(
+    spec.search.queries.length > 0 ? spec.search.queries : [spec.prompt.slice(0, 80)],
+    spec.prompt,
+    spec
+  )
+    .filter((q) => !usedQueries.has(q.trim().toLowerCase()))
+    .slice(0, count);
+}
 
 function resolveWaveQueries(
   spec: AgentSpec,
@@ -254,7 +277,7 @@ export class Executor {
       ? await rankSources(
           dedupeHits(seedSources),
           spec,
-          profile,
+          { ...profile, llmRank: false },
           maxSources,
           this.ollama,
           this.plannerModel,
@@ -408,17 +431,21 @@ export class Executor {
           [],
           searchLimits
         );
-        rankedSources = await rankSources(
-          dedupeHits([...rankedSources, ...retry]),
-          spec,
-          profile,
-          maxSources,
-          this.ollama,
-          this.plannerModel,
-          cfg.numCtx
-        );
-        this.logRankedSources(rankedSources, profile, "Reintento con consultas ampliadas");
-      } else {
+        if (retry.length > 0) {
+          rankedSources = await rankSources(
+            dedupeHits([...rankedSources, ...retry]),
+            spec,
+            profile,
+            maxSources,
+            this.ollama,
+            this.plannerModel,
+            cfg.numCtx
+          );
+          this.logRankedSources(rankedSources, profile, "Reintento con consultas ampliadas");
+        } else {
+          log(LogAction.INFO, "Reintento sin hits web — se mantienen semillas", undefined, "searching");
+        }
+      } else if (raw.length > 0) {
         progress("evaluating", Math.min(21, 12 + wave), `Priorizando ${raw.length + rankedSources.length}/${maxSources} enlaces…`, {
           sourcesEvaluated: raw.length,
           thinkingStep: profile.llmRank ? "IA evaluando relevancia" : "Ranking heurístico",
@@ -438,6 +465,13 @@ export class Executor {
           profile,
           wave === 0 ? "Ranking inicial" : `Ranking ola ${wave + 1}`
         );
+      } else {
+        log(
+          LogAction.INFO,
+          `Ola ${wave + 1} sin hits web — se omite ranking IA`,
+          `${rankedSources.length}/${maxSources} fuentes acumuladas`,
+          "searching"
+        );
       }
 
       const gained = rankedSources.length - beforeCount;
@@ -453,7 +487,7 @@ export class Executor {
         break;
       }
 
-      if (profile.gapAnalysis) {
+      if (profile.gapAnalysis && gained > 0) {
         progress("thinking", Math.min(21, 13 + wave), "Evaluando cobertura…", { action: LogAction.LLM_COVERAGE });
         const coverage = await analyzeCoverage(
           spec,
@@ -483,6 +517,15 @@ export class Executor {
           progress("thinking", 19, "Cobertura suficiente");
           break;
         }
+      } else if (profile.gapAnalysis && gained === 0) {
+        // Sin fuentes nuevas: no gastar minutos en coverage LLM; rotar consultas heurísticas.
+        pendingNewQueries = heuristicCoverageQueries(spec, usedQueries, perWaveTarget);
+        log(
+          LogAction.INFO,
+          "Sin progreso — consultas heurísticas (sin coverage IA)",
+          formatBulletList(pendingNewQueries),
+          "thinking"
+        );
       }
 
       wave++;

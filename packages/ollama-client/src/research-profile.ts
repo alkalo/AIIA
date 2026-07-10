@@ -119,7 +119,8 @@ export interface ResolvedModels {
 // aproximados. Se elige dinámicamente el mejor modelo que el PC puede ejecutar.
 const MODEL_LADDER: { model: string; minRamGb: number; minVramGb: number }[] = [
   { model: "qwen2.5:32b", minRamGb: 48, minVramGb: 24 },
-  { model: "qwen2.5:14b", minRamGb: 16, minVramGb: 10 },
+  // 14b needs headroom beyond 16GB RAM or real GPU VRAM; otherwise chats take ~5 min.
+  { model: "qwen2.5:14b", minRamGb: 24, minVramGb: 10 },
   { model: "qwen2.5:7b", minRamGb: 8, minVramGb: 6 },
   { model: "qwen2.5:3b", minRamGb: 4, minVramGb: 0 },
   { model: "llama3.2:1b", minRamGb: 0, minVramGb: 0 },

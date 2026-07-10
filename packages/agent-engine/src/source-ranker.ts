@@ -56,7 +56,7 @@ Prioritize authoritative sources matching the goal. Mark low-quality or off-topi
           )}`,
         },
       ],
-      { model: plannerModel, temperature: 0.25, format: "json", numCtx }
+      { model: plannerModel, temperature: 0.25, format: "json", numCtx, timeoutMs: 90_000 }
     );
     const scored = coerceJsonArray<LlmRankItem>(response);
     if (scored.length === 0) return applyFetchPolicy(heuristic, profile, limit);

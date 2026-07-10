@@ -16,6 +16,25 @@ function tokenize(text: string): string[] {
 }
 
 function coreKeywords(spec: AgentSpec, max = 6): string {
+  if (preferEnglishSearch(spec)) {
+    // Spanish prompts for AU/NZ still need English SERP terms.
+    const en = [
+      "community",
+      "wellbeing",
+      "grant",
+      "australia",
+      "new zealand",
+      "local",
+      "nonprofit",
+    ];
+    const blob = `${spec.prompt} ${spec.filters.criteria}`.toLowerCase();
+    const picked = en.filter((w) => blob.includes(w) || blob.includes(w.replace(" ", "")));
+    if (/australia|australian|au\b/i.test(blob)) picked.unshift("australia");
+    if (/new zealand|nz\b/i.test(blob)) picked.unshift("new zealand");
+    if (/wellbeing|bienestar/i.test(blob)) picked.unshift("wellbeing");
+    if (/community|comunidad/i.test(blob)) picked.unshift("community");
+    return [...new Set(picked)].slice(0, max).join(" ") || "community grant australia";
+  }
   const tokens = tokenize(`${spec.prompt} ${spec.filters.criteria}`);
   return [...new Set(tokens)].slice(0, max).join(" ");
 }
@@ -42,10 +61,13 @@ const GRANT_BOARDS_BY_REGION: GrantBoards[] = [
       "philanthropy.org.au",
       "frrr.org.au",
       "ourcommunity.com.au",
+      "grants.gov.au",
+      "communitygrants.gov.au",
     ],
   },
   {
-    match: /spain|españa|español|es\b|madrid|barcelona|subvenc|convocatoria/i,
+    // Require Spain/ES locale signals — do NOT match bare "subvenc" (Spanish prompts for AU/NZ).
+    match: /spain|españa|español|\bes\b|madrid|barcelona|gobierno de españa|boe\.es/i,
     boards: [
       "sede.administracion.gob.es",
       "boe.es",
@@ -75,13 +97,23 @@ const GRANT_BOARDS_BY_REGION: GrantBoards[] = [
 export function grantBoards(spec: AgentSpec): string[] {
   const blob = `${spec.prompt} ${spec.filters.criteria} ${spec.search.queries.join(" ")}`;
   const boards = [...GLOBAL_GRANT_BOARDS];
+  const isAuNz = /australia|australian|au\b|nz\b|new zealand|frrr/i.test(blob);
   for (const region of GRANT_BOARDS_BY_REGION) {
+    // Skip Spain boards when the goal is clearly AU/NZ.
+    if (isAuNz && /spain|españa|boe/i.test(region.match.source)) continue;
     if (region.match.test(blob)) boards.push(...region.boards);
   }
   return [...new Set(boards)];
 }
 
+/** Prefer English SERP queries for AU/NZ/global portals even if the agent prompt is Spanish. */
+function preferEnglishSearch(spec: AgentSpec): boolean {
+  const blob = `${spec.prompt} ${spec.filters.criteria}`;
+  return /australia|australian|au\b|nz\b|new zealand|global|international|wellbeing/i.test(blob);
+}
+
 function isSpanish(spec: AgentSpec): boolean {
+  if (preferEnglishSearch(spec)) return false;
   return /(ci[oó]n|subvenc|convocatoria|espa[nñ]a|ayuda|beca)/i.test(
     `${spec.prompt} ${spec.filters.criteria}`
   );

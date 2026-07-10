@@ -55,14 +55,16 @@ export async function buildSearchPlan(
   "coverageCriteria": "how to know coverage is sufficient",
   "avoid": ["things to exclude"]
 }
-Each query MUST include key terms from the goal. Use site: operators for relevant portals. Return ONLY valid JSON.`,
+Each query MUST include key terms from the goal. Use site: operators for relevant portals.
+Write search queries in English when the goal targets Australia, New Zealand, global, or English-language portals — even if the goal text is in Spanish.
+Return ONLY valid JSON.`,
         },
         {
           role: "user",
           content: `Goal: ${spec.prompt}\nCriteria: ${spec.filters.criteria}\nTemplate: ${resolveTemplateId((spec.templateId ?? "custom") as import("./types.js").TemplateId)}`,
         },
       ],
-      { model: plannerModel, temperature: 0.35, format: "json", numCtx }
+      { model: plannerModel, temperature: 0.35, format: "json", numCtx, timeoutMs: 90_000 }
     );
     const parsed = (coerceJsonObject<Partial<SearchPlan>>(response) ?? {}) as Partial<SearchPlan>;
     const queries: PlannedQuery[] = Array.isArray(parsed.queries)
@@ -134,7 +136,7 @@ If coverage is good enough, sufficient=true and newQueries=[]. Return ONLY JSON.
           content: `Goal: ${spec.prompt}\nCoverage criteria: ${plan.coverageCriteria}\nFound ${collected.length} sources:\n${JSON.stringify(sample)}`,
         },
       ],
-      { model: plannerModel, temperature: 0.3, format: "json", numCtx }
+      { model: plannerModel, temperature: 0.3, format: "json", numCtx, timeoutMs: 90_000 }
     );
     const parsed = (coerceJsonObject<CoverageAnalysis>(response) ?? {
       sufficient: true,
@@ -149,10 +151,19 @@ If coverage is good enough, sufficient=true and newQueries=[]. Return ONLY JSON.
         : [],
     };
   } catch {
-    const fallback = [
-      `${spec.prompt.slice(0, 100)} grant open deadline`,
-      `${spec.prompt.slice(0, 80)} funding opportunity`,
-    ].filter((q) => q.trim().length > 8);
+    const blob = `${spec.prompt} ${spec.filters.criteria}`;
+    const auNz = /australia|new zealand|au\b|nz\b/i.test(blob);
+    const fallback = auNz
+      ? [
+          "community grant australia open deadline",
+          "new zealand community wellbeing grant open",
+          "site:business.gov.au grants community",
+          "site:frrr.org.au funding grant",
+        ]
+      : [
+          "grant open deadline funding opportunity",
+          "community foundation grant application",
+        ];
     return { sufficient: false, gaps: ["coverage analysis failed"], newQueries: fallback };
   }
 }

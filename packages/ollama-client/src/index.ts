@@ -76,7 +76,8 @@ export const EFFORT_CONFIGS: Record<EffortLevel, EffortConfig> = {
     queryExpansion: 10,
     refinePasses: 2,
     temperature: 0.3,
-    numCtx: 16384,
+    // 16k+ thrashing on 16GB RAM makes each chat ~5 min; keep usable for local runs.
+    numCtx: 8192,
     extractContentChars: 14000,
     filterBatchSize: 50,
     estimatedMinutes: [60, 120],
@@ -88,7 +89,7 @@ export const EFFORT_CONFIGS: Record<EffortLevel, EffortConfig> = {
     queryExpansion: 14,
     refinePasses: 3,
     temperature: 0.25,
-    numCtx: 32768,
+    numCtx: 12288,
     extractContentChars: 20000,
     filterBatchSize: 60,
     estimatedMinutes: [120, 240],
@@ -105,6 +106,8 @@ export interface ChatOptions {
   temperature?: number;
   numCtx?: number;
   format?: "json";
+  /** Abort chat if Ollama does not respond in time (default 90s). */
+  timeoutMs?: number;
 }
 
 export interface OllamaClientOptions {
@@ -159,26 +162,39 @@ export class OllamaClient {
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<string> {
-    const res = await fetch(`${this.baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: options.model,
-        messages,
-        stream: false,
-        format: options.format,
-        options: {
-          temperature: options.temperature ?? 0.5,
-          num_ctx: options.numCtx ?? 4096,
-        },
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Ollama chat failed: ${text}`);
+    const timeoutMs = options.timeoutMs ?? 90_000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${this.baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: options.model,
+          messages,
+          stream: false,
+          format: options.format,
+          options: {
+            temperature: options.temperature ?? 0.5,
+            num_ctx: options.numCtx ?? 4096,
+          },
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Ollama chat failed: ${text}`);
+      }
+      const data = (await res.json()) as { message: { content: string } };
+      return data.message.content;
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(`Ollama chat timed out after ${timeoutMs}ms (${options.model})`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    const data = (await res.json()) as { message: { content: string } };
-    return data.message.content;
   }
 }
 
@@ -210,7 +226,8 @@ export async function detectHardware(): Promise<HardwareInfo> {
     extractorModel = "qwen2.5:7b";
   } else if (totalRamGb >= 16) {
     profile = "high";
-    plannerModel = "qwen2.5:14b";
+    // Prefer 7b on 16GB without enough VRAM — 14b stalls research waves.
+    plannerModel = vramGb >= 10 ? "qwen2.5:14b" : "qwen2.5:7b";
     extractorModel = "qwen2.5:7b";
   } else if (totalRamGb >= 8) {
     profile = "medium";
