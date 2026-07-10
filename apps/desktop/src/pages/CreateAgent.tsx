@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import {
-  PlannerAgent,
   TEMPLATE_OPTIONS,
   getTemplate,
   queriesAreStale,
@@ -16,17 +15,14 @@ import {
   type PromptAttachment,
 } from "@aiia/agent-engine/browser";
 import { getEffortEstimate, EFFORT_LEVELS } from "@aiia/ollama-client/browser";
-import { api, type OllamaSetupProgress } from "../api";
+import { api } from "../api";
 import { ProgressBar } from "../components/ProgressBar";
 import { AgentSpecEditor } from "../components/AgentSpecEditor";
 import { useRunProgress } from "../hooks/useAgents";
-import {
-  DesktopOllamaClient,
-  formatOllamaError,
-  isOllamaNotInstalledError,
-  prepareOllamaForPlanner,
-  sanitizeOllamaProgressMessage,
-} from "../ollama-desktop";
+import { useAgentGeneration } from "../contexts/AgentGenerationContext";
+
+const PREVIEW_AGENT_KEY = "aiia-create-preview-agent-id";
+const TERMINAL_PHASES = new Set(["done", "error", "cancelled"]);
 
 export function CreateAgent() {
   const { t, i18n } = useTranslation();
@@ -43,23 +39,64 @@ export function CreateAgent() {
   const [spec, setSpec] = useState<AgentSpec | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
+  const {
+    isGenerating,
+    ollamaSetup,
+    error: generationError,
+    ollamaNeedsInstall,
+    generatedSpec,
+    consumeGeneratedSpec,
+    generateAgent,
+    clearError,
+  } = useAgentGeneration();
   const [error, setError] = useState("");
-  const [ollamaNeedsInstall, setOllamaNeedsInstall] = useState(false);
-  const [ollamaSetup, setOllamaSetup] = useState<{ message: string; percent: number } | null>(
-    null
-  );
 
   const [previewRunning, setPreviewRunning] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
 
-  const { progress, isFinished } = useRunProgress(runningId, showProgress);
+  const { progress, isFinished } = useRunProgress(runningId, Boolean(runningId));
+
+  const displayError = error || generationError;
 
   const dismissProgress = useCallback(() => {
     setShowProgress(false);
     setPreviewRunning(false);
     setRunningId(null);
     previewAgentIdRef.current = null;
+    sessionStorage.removeItem(PREVIEW_AGENT_KEY);
+  }, []);
+
+  useEffect(() => {
+    if (!generatedSpec) return;
+    setSpec(generatedSpec);
+    consumeGeneratedSpec();
+  }, [generatedSpec, consumeGeneratedSpec]);
+
+  useEffect(() => {
+    const storedId = sessionStorage.getItem(PREVIEW_AGENT_KEY);
+    if (!storedId) return;
+
+    let cancelled = false;
+    api
+      .getRunProgress(storedId)
+      .then((p) => {
+        if (cancelled || !p || TERMINAL_PHASES.has(p.phase)) {
+          sessionStorage.removeItem(PREVIEW_AGENT_KEY);
+          return;
+        }
+        previewAgentIdRef.current = storedId;
+        setRunningId(storedId);
+        setShowProgress(true);
+        setPreviewRunning(true);
+      })
+      .catch(() => {
+        sessionStorage.removeItem(PREVIEW_AGENT_KEY);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -85,11 +122,15 @@ export function CreateAgent() {
 
     listen<{ agentId?: string }>("agent-run-complete", (event) => {
       const aid = event.payload.agentId ?? previewAgentIdRef.current;
-      if (!aid || aid === previewAgentIdRef.current) setPreviewRunning(false);
+      if (!aid || aid === previewAgentIdRef.current) {
+        setPreviewRunning(false);
+        sessionStorage.removeItem(PREVIEW_AGENT_KEY);
+      }
     }).then((fn) => unsubs.push(fn));
 
     listen<string>("agent-run-error", () => {
       setPreviewRunning(false);
+      sessionStorage.removeItem(PREVIEW_AGENT_KEY);
     }).then((fn) => unsubs.push(fn));
 
     return () => {
@@ -98,7 +139,10 @@ export function CreateAgent() {
   }, [previewRunning]);
 
   useEffect(() => {
-    if (isFinished) setPreviewRunning(false);
+    if (isFinished) {
+      setPreviewRunning(false);
+      sessionStorage.removeItem(PREVIEW_AGENT_KEY);
+    }
   }, [isFinished]);
 
   const buildSpecForSave = (status: AgentSpec["status"] = "draft"): AgentSpec | null => {
@@ -154,45 +198,11 @@ export function CreateAgent() {
   };
 
   const handleGenerate = async () => {
-    if (!prompt.trim()) return;
-    setLoading(true);
+    if (!prompt.trim() || isGenerating) return;
     setError("");
-    setOllamaNeedsInstall(false);
-    setOllamaSetup(null);
-    let unlisten: (() => void) | undefined;
-    try {
-      const hw = await api.getHardwareInfo();
-      unlisten = await listen<OllamaSetupProgress>("ollama-setup-progress", (event) => {
-        setOllamaSetup({
-          message: sanitizeOllamaProgressMessage(event.payload.message),
-          percent: event.payload.percent,
-        });
-      });
-      setOllamaSetup({ message: t("create.ollamaPreparing"), percent: 0 });
-      await prepareOllamaForPlanner(hw.profile);
-
-      setOllamaSetup({ message: t("create.ollamaGenerating"), percent: 100 });
-      const planner = new PlannerAgent(new DesktopOllamaClient(), hw.profile);
-      const lang = i18n.language.startsWith("es") ? "es" : "en";
-      const generated = await planner.plan(prompt, templateId, lang, attachments);
-      const normalized = normalizeAgentSpec({
-        ...generated,
-        effort,
-        contextAttachments: attachments.length > 0 ? attachments : generated.contextAttachments,
-      });
-      setSpec(normalized);
-    } catch (e) {
-      if (isOllamaNotInstalledError(e)) {
-        setOllamaNeedsInstall(true);
-        setError(t("create.ollamaNotInstalled"));
-      } else {
-        setError(formatOllamaError(e));
-      }
-    } finally {
-      unlisten?.();
-      setOllamaSetup(null);
-      setLoading(false);
-    }
+    clearError();
+    const lang = i18n.language.startsWith("es") ? "es" : "en";
+    await generateAgent({ prompt, templateId, effort, attachments, lang });
   };
 
   const handleSaveDraft = async () => {
@@ -222,6 +232,7 @@ export function CreateAgent() {
       const saved = await api.saveAgent(toSave);
       previewAgentIdRef.current = saved.id;
       setRunningId(saved.id);
+      sessionStorage.setItem(PREVIEW_AGENT_KEY, saved.id);
       await api.runAgent(saved.id, "low");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -341,16 +352,16 @@ export function CreateAgent() {
             type="button"
             className="btn btn-primary"
             onClick={handleGenerate}
-            disabled={loading || !prompt.trim()}
+            disabled={isGenerating || !prompt.trim()}
           >
-            {loading ? t("common.loading") : t("create.generate")}
+            {isGenerating ? t("common.loading") : t("create.generate")}
           </button>
         </div>
       </div>
 
-      {error && (
+      {displayError && (
         <div>
-          <p className="error-text">{error}</p>
+          <p className="error-text">{displayError}</p>
           {ollamaNeedsInstall && (
             <button
               type="button"
@@ -364,23 +375,28 @@ export function CreateAgent() {
         </div>
       )}
 
-      {ollamaSetup && (
+      {(ollamaSetup || isGenerating || showProgress) && (
         <div className="card" style={{ marginBottom: "1rem" }}>
-          <p>{ollamaSetup.message}</p>
-          <ProgressBar phase="setup" message={ollamaSetup.message} percent={ollamaSetup.percent} />
-        </div>
-      )}
-
-      {showProgress && (
-        <div className="card" style={{ marginBottom: "1rem" }}>
-          <ProgressBar
-            phase={progress?.phase ?? "searching"}
-            percent={progress?.percent ?? 0}
-            message={progress?.message ?? t("common.loading")}
-            thinkingStep={progress?.thinkingStep}
-            budgetUsedSec={progress?.budgetUsedSec}
-            onDismiss={dismissProgress}
-          />
+          {(ollamaSetup || isGenerating) && (
+            <>
+              <p>{ollamaSetup?.message ?? t("create.ollamaGenerating")}</p>
+              <ProgressBar
+                phase="setup"
+                message={ollamaSetup?.message ?? t("create.ollamaGenerating")}
+                percent={ollamaSetup?.percent ?? 0}
+              />
+            </>
+          )}
+          {showProgress && (
+            <ProgressBar
+              phase={progress?.phase ?? "searching"}
+              percent={progress?.percent ?? 0}
+              message={progress?.message ?? t("common.loading")}
+              thinkingStep={progress?.thinkingStep}
+              budgetUsedSec={progress?.budgetUsedSec}
+              onDismiss={dismissProgress}
+            />
+          )}
         </div>
       )}
 

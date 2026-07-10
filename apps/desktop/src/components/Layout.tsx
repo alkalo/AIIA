@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation } from "react-router-dom";
+import { AgentGenerationProvider } from "../contexts/AgentGenerationContext";
 import "./Layout.css";
 
 export function Layout() {
@@ -56,7 +57,9 @@ export function Layout() {
         </div>
       </aside>
       <main className="content">
-        <Outlet />
+        <AgentGenerationProvider>
+          <Outlet />
+        </AgentGenerationProvider>
       </main>
     </div>
   );
