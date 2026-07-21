@@ -62,7 +62,7 @@ export function ReviewAgent() {
     setError("");
     try {
       await api.publishAgent(id);
-      navigate("/");
+      navigate("/agents");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

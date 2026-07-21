@@ -8,13 +8,13 @@ alwaysApply: true
 
 ## Producto
 - App desktop Windows con Tauri 2 + React + TypeScript
-- Máximo 5 agentes publicados simultáneamente
+- Dos modos: **AIIA Chat** (home) + **Agentes** (máximo 5 published)
 - Todo local: datos, credenciales, IA (Ollama). Sin Google, sin APIs de pago
-- Internet solo para búsqueda/scraping durante ejecución de agentes
+- Internet solo para búsqueda/scraping durante chat tools o ejecución de agentes
 
 ## Stack obligatorio
-- `apps/desktop` — Tauri 2 + React UI
-- `crates/aiia-core` — Rust: DB, crypto DPAPI, scheduler
+- `apps/desktop` — Tauri 2 + React UI (Chat home `/`, agentes `/agents`)
+- `crates/aiia-core` — Rust: DB, crypto DPAPI, scheduler, chats
 - `packages/ollama-client` — Cliente Ollama + detección HW
 - `packages/agent-engine` — Planner, Executor, effort levels, AgentSpec
 - `packages/scraper` — DuckDuckGo + Playwright
@@ -23,6 +23,8 @@ alwaysApply: true
 
 ## Convenciones
 - AgentSpec es el contrato central (`docs/agent-spec-schema.md`)
+- AIIA Chat: streaming, historial, visión/export/python local, tools web, bridge agentes (`docs/epics/e7-aiia-chat.md`, `e8-local-parity.md`)
+- Sin plugins / GPT store / cloud; gen. imágenes solo local (A1111/Forge)
 - Revisión humana obligatoria antes de publicar agente
 - i18n EN/ES con i18next
 - Documentar cambios en `docs/`

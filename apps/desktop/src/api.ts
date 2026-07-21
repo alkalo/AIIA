@@ -92,6 +92,47 @@ export interface AppInfo {
   platform: string;
 }
 
+export interface ChatRecord {
+  id: string;
+  title: string;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessageRecord {
+  id: string;
+  chatId: string;
+  role: string;
+  content: string;
+  artifactId?: string;
+  images?: string[];
+  createdAt: string;
+}
+
+export interface ChatArtifactRecord {
+  id: string;
+  chatId: string;
+  name: string;
+  path: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface ChatStreamEvent {
+  streamId: string;
+  delta: string;
+  done: boolean;
+  cancelled?: boolean;
+  error?: string;
+}
+
+export interface WebSearchHit {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
 export interface UpdateCheckResult {
   upToDate: boolean;
   available?: boolean;
@@ -199,4 +240,66 @@ export const api = {
   getUpdatePrefs: () => invoke<UpdatePrefs>("get_update_prefs"),
   setUpdatePrefs: (autoUpdateOnStartup: boolean) =>
     invoke<UpdatePrefs>("set_update_prefs", { autoUpdateOnStartup }),
+  createChat: (title?: string) => invoke<ChatRecord>("create_chat", { title }),
+  listChats: (archivedOnly = false) =>
+    invoke<ChatRecord[]>("list_chats", { archivedOnly }),
+  getChat: (id: string) => invoke<ChatRecord>("get_chat", { id }),
+  renameChat: (id: string, title: string) =>
+    invoke<ChatRecord>("rename_chat", { id, title }),
+  archiveChat: (id: string, archived: boolean) =>
+    invoke<ChatRecord>("archive_chat", { id, archived }),
+  deleteChat: (id: string) => invoke("delete_chat", { id }),
+  listChatMessages: (chatId: string) =>
+    invoke<ChatMessageRecord[]>("list_chat_messages", { chatId }),
+  addChatMessage: (
+    chatId: string,
+    role: string,
+    content: string,
+    artifactId?: string,
+    images?: string[]
+  ) =>
+    invoke<ChatMessageRecord>("add_chat_message", {
+      chatId,
+      role,
+      content,
+      artifactId: artifactId ?? null,
+      images: images ?? null,
+    }),
+  listChatArtifacts: (chatId: string) =>
+    invoke<ChatArtifactRecord[]>("list_chat_artifacts", { chatId }),
+  getChatSystemPrompt: (modeAddon?: string) =>
+    invoke<string>("get_chat_system_prompt", { modeAddon: modeAddon ?? null }),
+  chatWebSearch: (query: string, limit = 8, depth = "eficaz") =>
+    invoke<WebSearchHit[]>("chat_web_search", { query, limit, depth }),
+  chatFetchUrl: (url: string, maxChars = 12000) =>
+    invoke<string>("chat_fetch_url", { url, maxChars }),
+  chatCreateAgentDraft: (name: string, prompt: string) =>
+    invoke<AgentRecord>("chat_create_agent_draft", { name, prompt }),
+  chatGenerateImage: (chatId: string, prompt: string) =>
+    invoke<{ path: string; prompt: string }>("chat_generate_image", { chatId, prompt }),
+  chatRunPython: (code: string, timeoutSecs = 12) =>
+    invoke<string>("chat_run_python", { code, timeoutSecs }),
+  exportChatMarkdown: (chatId: string) =>
+    invoke<string>("export_chat_markdown", { chatId }),
+  saveChatImage: (chatId: string, fileName: string, bytesBase64: string) =>
+    invoke<string>("save_chat_image", { chatId, fileName, bytesBase64 }),
+  readFileBase64: (path: string) => invoke<string>("read_file_base64", { path }),
+  pickVisionModel: (models: string[], fallback: string) =>
+    invoke<string>("pick_vision_model", { models, fallback }),
+  ollamaChatStream: (
+    streamId: string,
+    model: string,
+    messages: { role: string; content: string; images?: string[] }[],
+    temperature?: number,
+    numCtx?: number
+  ) =>
+    invoke("ollama_chat_stream", {
+      streamId,
+      model,
+      messages,
+      temperature,
+      numCtx,
+    }),
+  cancelChatStream: (streamId: string) =>
+    invoke("cancel_chat_stream", { streamId }),
 };

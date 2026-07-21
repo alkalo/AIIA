@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use aiia_core::crypto::encrypt_string;
 use aiia_core::db::Database;
 use aiia_core::models::{
-    AgentRecord, AgentSpec, AgentStatus, CredentialRecord, EffortLevel, ResultRecord, RunLog,
-    MAX_PUBLISHED_AGENTS,
+    AgentRecord, AgentSpec, AgentStatus, ChatArtifactRecord, ChatMessageRecord, ChatRecord,
+    CredentialRecord, EffortLevel, ResultRecord, RunLog, MAX_PUBLISHED_AGENTS,
 };
 use aiia_core::scheduler::{
     resolve_node_executable, spawn_agent_runner, spawn_credential_runner, RunnerSpawnConfig,
@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 mod ollama;
 mod updater;
+mod chat;
 
 pub struct AppState {
     pub db: Arc<Database>,
@@ -27,6 +28,7 @@ pub struct AppState {
     pub credential_runner_path: PathBuf,
     pub runner_spawn: RunnerSpawnConfig,
     pub(crate) run_queue: Arc<Mutex<RunQueue>>,
+    pub(crate) cancelled_chat_streams: Arc<Mutex<HashSet<String>>>,
 }
 
 struct QueuedRun {
@@ -231,6 +233,293 @@ async fn ollama_chat(
     format: Option<String>,
 ) -> Result<String, String> {
     ollama::ollama_chat(model, messages, temperature, num_ctx, format).await
+}
+
+#[tauri::command]
+async fn ollama_chat_stream(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    stream_id: String,
+    model: String,
+    messages: Vec<serde_json::Value>,
+    temperature: Option<f64>,
+    num_ctx: Option<u32>,
+) -> Result<(), String> {
+    let cancel_set = state.cancelled_chat_streams.clone();
+    {
+        let mut set = cancel_set.lock().map_err(|e| e.to_string())?;
+        set.remove(&stream_id);
+    }
+    ollama::ollama_chat_stream(
+        app,
+        stream_id,
+        model,
+        messages,
+        temperature,
+        num_ctx,
+        cancel_set,
+    )
+    .await
+}
+
+#[tauri::command]
+fn cancel_chat_stream(state: State<'_, AppState>, stream_id: String) -> Result<(), String> {
+    let mut set = state
+        .cancelled_chat_streams
+        .lock()
+        .map_err(|e| e.to_string())?;
+    set.insert(stream_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn create_chat(state: State<AppState>, title: Option<String>) -> Result<ChatRecord, String> {
+    let title = title.unwrap_or_else(|| "New chat".to_string());
+    state.db.create_chat(&title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_chats(state: State<AppState>, archived_only: Option<bool>) -> Result<Vec<ChatRecord>, String> {
+    state
+        .db
+        .list_chats(archived_only.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_chat(state: State<AppState>, id: String) -> Result<ChatRecord, String> {
+    state.db.get_chat(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn rename_chat(state: State<AppState>, id: String, title: String) -> Result<ChatRecord, String> {
+    state.db.rename_chat(&id, &title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn archive_chat(state: State<AppState>, id: String, archived: bool) -> Result<ChatRecord, String> {
+    state
+        .db
+        .set_chat_archived(&id, archived)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_chat(state: State<AppState>, id: String) -> Result<(), String> {
+    let artifacts = state.db.list_chat_artifacts(&id).unwrap_or_default();
+    for a in artifacts {
+        let _ = std::fs::remove_file(&a.path);
+    }
+    state.db.delete_chat(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_chat_messages(
+    state: State<AppState>,
+    chat_id: String,
+) -> Result<Vec<ChatMessageRecord>, String> {
+    state
+        .db
+        .list_chat_messages(&chat_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_chat_message(
+    state: State<AppState>,
+    chat_id: String,
+    role: String,
+    content: String,
+    artifact_id: Option<String>,
+    images: Option<Vec<String>>,
+) -> Result<ChatMessageRecord, String> {
+    let msg = state
+        .db
+        .add_chat_message(
+            &chat_id,
+            &role,
+            &content,
+            artifact_id.as_deref(),
+            images.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+    let dir = state.data_dir.join("chat-artifacts").join(&chat_id);
+    let _ = state.db.compact_chat_context_if_needed(&chat_id, &dir);
+    Ok(msg)
+}
+
+#[tauri::command]
+fn list_chat_artifacts(
+    state: State<AppState>,
+    chat_id: String,
+) -> Result<Vec<ChatArtifactRecord>, String> {
+    state
+        .db
+        .list_chat_artifacts(&chat_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_chat_system_prompt(mode_addon: Option<String>) -> String {
+    chat::system_prompt_with_mode(mode_addon.as_deref())
+}
+
+#[tauri::command]
+async fn chat_web_search(
+    query: String,
+    limit: Option<usize>,
+    depth: Option<String>,
+) -> Result<Vec<chat::WebSearchHit>, String> {
+    chat::web_search_with_depth(
+        &query,
+        limit.unwrap_or(8),
+        depth.as_deref().unwrap_or("eficaz"),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn chat_fetch_url(url: String, max_chars: Option<usize>) -> Result<String, String> {
+    chat::fetch_url_text(&url, max_chars.unwrap_or(12_000)).await
+}
+
+#[tauri::command]
+fn chat_create_agent_draft(
+    state: State<AppState>,
+    name: String,
+    prompt: String,
+) -> Result<AgentRecord, String> {
+    let spec = chat::draft_agent_from_prompt(&name, &prompt);
+    ensure_agent_file(&state.data_dir, &spec)?;
+    state.db.save_agent(&spec).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn chat_generate_image(
+    state: State<'_, AppState>,
+    chat_id: String,
+    prompt: String,
+) -> Result<chat::GeneratedImage, String> {
+    let dir = state.data_dir.join("chat-artifacts").join(&chat_id);
+    let gen = chat::generate_image(&prompt, &dir).await?;
+    let size = std::fs::metadata(&gen.path)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
+    let _ = state.db.add_chat_artifact(
+        &chat_id,
+        std::path::Path::new(&gen.path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image.png"),
+        &gen.path,
+        size,
+    );
+    Ok(gen)
+}
+
+#[tauri::command]
+fn chat_run_python(code: String, timeout_secs: Option<u64>) -> Result<String, String> {
+    chat::run_python(&code, timeout_secs.unwrap_or(12))
+}
+
+#[tauri::command]
+fn export_chat_markdown(state: State<AppState>, chat_id: String) -> Result<String, String> {
+    let chat = state.db.get_chat(&chat_id).map_err(|e| e.to_string())?;
+    let messages = state
+        .db
+        .list_chat_messages(&chat_id)
+        .map_err(|e| e.to_string())?;
+    let mut md = format!("# {}\n\n", chat.title);
+    for m in messages {
+        if m.role == "system" {
+            continue;
+        }
+        md.push_str(&format!("## {}\n\n{}\n\n", m.role, m.content));
+        if let Some(images) = &m.images {
+            for p in images {
+                md.push_str(&format!("![]({p})\n\n"));
+            }
+        }
+    }
+    let dir = state.data_dir.join("chat-exports");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe: String = chat
+        .title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let path = dir.join(format!("{}-{}.md", &chat_id[..8.min(chat_id.len())], safe));
+    std::fs::write(&path, md).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn save_chat_image(
+    state: State<AppState>,
+    chat_id: String,
+    file_name: String,
+    bytes_base64: String,
+) -> Result<String, String> {
+    use base64::Engine;
+    let raw = bytes_base64
+        .split(',')
+        .next_back()
+        .unwrap_or(&bytes_base64);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 12 * 1024 * 1024 {
+        return Err("Image too large (max 12MB)".to_string());
+    }
+    let dir = state.data_dir.join("chat-artifacts").join(&chat_id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe: String = file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let name = if safe.is_empty() {
+        format!("{}.png", &Uuid::new_v4().to_string()[..8])
+    } else {
+        format!("{}-{}", &Uuid::new_v4().to_string()[..8], safe)
+    };
+    let path = dir.join(name);
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    let _ = state.db.add_chat_artifact(
+        &chat_id,
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image"),
+        path.to_string_lossy().as_ref(),
+        bytes.len() as i64,
+    );
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn read_file_base64(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    if bytes.len() > 12 * 1024 * 1024 {
+        return Err("File too large".to_string());
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+#[tauri::command]
+fn pick_vision_model(models: Vec<String>, fallback: String) -> String {
+    let preferred = ["qwen2.5vl", "llava", "minicpm-v", "moondream", "bakllava"];
+    for p in preferred {
+        if let Some(m) = models.iter().find(|m| m.to_lowercase().contains(p)) {
+            return m.clone();
+        }
+    }
+    fallback
 }
 
 #[tauri::command]
@@ -2119,6 +2408,7 @@ pub fn run() {
             credential_runner_path,
             runner_spawn,
             run_queue: Arc::new(Mutex::new(RunQueue::default())),
+            cancelled_chat_streams: Arc::new(Mutex::new(HashSet::new())),
         })
         .invoke_handler(tauri::generate_handler![
             get_hardware_info,
@@ -2128,6 +2418,27 @@ pub fn run() {
             ensure_ollama_for_planner,
             ensure_ollama_model,
             ollama_chat,
+            ollama_chat_stream,
+            cancel_chat_stream,
+            create_chat,
+            list_chats,
+            get_chat,
+            rename_chat,
+            archive_chat,
+            delete_chat,
+            list_chat_messages,
+            add_chat_message,
+            list_chat_artifacts,
+            get_chat_system_prompt,
+            chat_web_search,
+            chat_fetch_url,
+            chat_create_agent_draft,
+            chat_generate_image,
+            chat_run_python,
+            export_chat_markdown,
+            save_chat_image,
+            read_file_base64,
+            pick_vision_model,
             list_agents,
             get_agent,
             save_agent,

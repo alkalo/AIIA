@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
 use crate::models::{
-    AgentRecord, AgentSpec, AgentStatus, CredentialRecord, ResultRecord, RunLog, MAX_PUBLISHED_AGENTS,
+    AgentRecord, AgentSpec, AgentStatus, ChatArtifactRecord, ChatMessageRecord, ChatRecord,
+    CredentialRecord, ResultRecord, RunLog, CHAT_CONTEXT_CHAR_LIMIT, MAX_PUBLISHED_AGENTS,
 };
 
 pub struct Database {
@@ -102,6 +103,38 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_results_agent ON results(agent_id);
             CREATE INDEX IF NOT EXISTS idx_run_logs_agent ON run_logs(agent_id);
+
+            CREATE TABLE IF NOT EXISTS chats (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                chat_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                artifact_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_artifacts (
+                id TEXT PRIMARY KEY,
+                chat_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(chat_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_chat_artifacts_chat ON chat_artifacts(chat_id);
             "#,
         )?;
         let _ = conn.execute("ALTER TABLE credentials ADD COLUMN login_url TEXT", []);
@@ -109,6 +142,7 @@ impl Database {
             "ALTER TABLE credentials ADD COLUMN has_session INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        let _ = conn.execute("ALTER TABLE chat_messages ADD COLUMN images_json TEXT", []);
         Ok(())
     }
 
@@ -654,5 +688,291 @@ impl Database {
             params![next.to_rfc3339(), agent_id],
         )?;
         Ok(())
+    }
+
+    pub fn create_chat(&self, title: &str) -> Result<ChatRecord> {
+        let now = Utc::now();
+        let id = Uuid::new_v4().to_string();
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        conn.execute(
+            "INSERT INTO chats (id, title, archived, created_at, updated_at) VALUES (?1, ?2, 0, ?3, ?4)",
+            params![id, title, now.to_rfc3339(), now.to_rfc3339()],
+        )?;
+        Ok(ChatRecord {
+            id,
+            title: title.to_string(),
+            archived: false,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn list_chats(&self, archived_only: bool) -> Result<Vec<ChatRecord>> {
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        // false = active only; true = archived only
+        let sql = if archived_only {
+            "SELECT id, title, archived, created_at, updated_at FROM chats WHERE archived = 1 ORDER BY updated_at DESC"
+        } else {
+            "SELECT id, title, archived, created_at, updated_at FROM chats WHERE archived = 0 ORDER BY updated_at DESC"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ChatRecord {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                archived: row.get::<_, i32>(2)? != 0,
+                created_at: row.get::<_, String>(3)?.parse().unwrap_or_else(|_| Utc::now()),
+                updated_at: row.get::<_, String>(4)?.parse().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_chat(&self, id: &str) -> Result<ChatRecord> {
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        conn.query_row(
+            "SELECT id, title, archived, created_at, updated_at FROM chats WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(ChatRecord {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    archived: row.get::<_, i32>(2)? != 0,
+                    created_at: row.get::<_, String>(3)?.parse().unwrap_or_else(|_| Utc::now()),
+                    updated_at: row.get::<_, String>(4)?.parse().unwrap_or_else(|_| Utc::now()),
+                })
+            },
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn rename_chat(&self, id: &str, title: &str) -> Result<ChatRecord> {
+        let now = Utc::now();
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        conn.execute(
+            "UPDATE chats SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now.to_rfc3339(), id],
+        )?;
+        drop(conn);
+        self.get_chat(id)
+    }
+
+    pub fn set_chat_archived(&self, id: &str, archived: bool) -> Result<ChatRecord> {
+        let now = Utc::now();
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        conn.execute(
+            "UPDATE chats SET archived = ?1, updated_at = ?2 WHERE id = ?3",
+            params![if archived { 1 } else { 0 }, now.to_rfc3339(), id],
+        )?;
+        drop(conn);
+        self.get_chat(id)
+    }
+
+    pub fn delete_chat(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        conn.execute("DELETE FROM chat_messages WHERE chat_id = ?1", params![id])?;
+        conn.execute("DELETE FROM chat_artifacts WHERE chat_id = ?1", params![id])?;
+        conn.execute("DELETE FROM chats WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn list_chat_messages(&self, chat_id: &str) -> Result<Vec<ChatMessageRecord>> {
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, chat_id, role, content, artifact_id, images_json, created_at FROM chat_messages WHERE chat_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![chat_id], |row| {
+            let images_json: Option<String> = row.get(5)?;
+            let images = images_json.and_then(|j| serde_json::from_str(&j).ok());
+            Ok(ChatMessageRecord {
+                id: row.get(0)?,
+                chat_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                artifact_id: row.get(4)?,
+                images,
+                created_at: row.get::<_, String>(6)?.parse().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn add_chat_message(
+        &self,
+        chat_id: &str,
+        role: &str,
+        content: &str,
+        artifact_id: Option<&str>,
+        images: Option<&[String]>,
+    ) -> Result<ChatMessageRecord> {
+        let now = Utc::now();
+        let id = Uuid::new_v4().to_string();
+        let images_json = images
+            .filter(|v| !v.is_empty())
+            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        conn.execute(
+            "INSERT INTO chat_messages (id, chat_id, role, content, artifact_id, images_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, chat_id, role, content, artifact_id, images_json, now.to_rfc3339()],
+        )?;
+        conn.execute(
+            "UPDATE chats SET updated_at = ?1 WHERE id = ?2",
+            params![now.to_rfc3339(), chat_id],
+        )?;
+        Ok(ChatMessageRecord {
+            id,
+            chat_id: chat_id.to_string(),
+            role: role.to_string(),
+            content: content.to_string(),
+            artifact_id: artifact_id.map(|s| s.to_string()),
+            images: images.map(|v| v.to_vec()),
+            created_at: now,
+        })
+    }
+
+    pub fn add_chat_artifact(
+        &self,
+        chat_id: &str,
+        name: &str,
+        path: &str,
+        size_bytes: i64,
+    ) -> Result<ChatArtifactRecord> {
+        let now = Utc::now();
+        let id = Uuid::new_v4().to_string();
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        conn.execute(
+            "INSERT INTO chat_artifacts (id, chat_id, name, path, size_bytes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, chat_id, name, path, size_bytes, now.to_rfc3339()],
+        )?;
+        Ok(ChatArtifactRecord {
+            id,
+            chat_id: chat_id.to_string(),
+            name: name.to_string(),
+            path: path.to_string(),
+            size_bytes,
+            created_at: now,
+        })
+    }
+
+    pub fn list_chat_artifacts(&self, chat_id: &str) -> Result<Vec<ChatArtifactRecord>> {
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, chat_id, name, path, size_bytes, created_at FROM chat_artifacts WHERE chat_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![chat_id], |row| {
+            Ok(ChatArtifactRecord {
+                id: row.get(0)?,
+                chat_id: row.get(1)?,
+                name: row.get(2)?,
+                path: row.get(3)?,
+                size_bytes: row.get(4)?,
+                created_at: row.get::<_, String>(5)?.parse().unwrap_or_else(|_| Utc::now()),
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// If thread exceeds char limit, fold oldest user/assistant pairs into a local artifact.
+    pub fn compact_chat_context_if_needed(
+        &self,
+        chat_id: &str,
+        artifacts_dir: &Path,
+    ) -> Result<Option<ChatArtifactRecord>> {
+        let messages = self.list_chat_messages(chat_id)?;
+        let total: usize = messages.iter().map(|m| m.content.len()).sum();
+        if total <= CHAT_CONTEXT_CHAR_LIMIT || messages.len() < 6 {
+            return Ok(None);
+        }
+
+        let keep_from = messages.len().saturating_sub(4);
+        let to_archive: Vec<&ChatMessageRecord> = messages.iter().take(keep_from).collect();
+        if to_archive.is_empty() {
+            return Ok(None);
+        }
+
+        let mut body = String::from("# Archived conversation context\n\n");
+        for m in &to_archive {
+            body.push_str(&format!("## {}\n\n{}\n\n", m.role, m.content));
+        }
+
+        std::fs::create_dir_all(artifacts_dir)?;
+        let artifact_id = Uuid::new_v4().to_string();
+        let name = format!("context-{}.md", &artifact_id[..8]);
+        let path = artifacts_dir.join(&name);
+        std::fs::write(&path, &body)?;
+        let size_bytes = body.len() as i64;
+
+        let artifact = self.add_chat_artifact(
+            chat_id,
+            &name,
+            path.to_string_lossy().as_ref(),
+            size_bytes,
+        )?;
+
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        for m in &to_archive {
+            conn.execute("DELETE FROM chat_messages WHERE id = ?1", params![m.id])?;
+        }
+        drop(conn);
+
+        let summary = format!(
+            "[Previous conversation archived to file: {} ({} bytes). Ask to open it if you need older details.]",
+            name, size_bytes
+        );
+        self.add_chat_message(chat_id, "system", &summary, Some(&artifact.id), None)?;
+        Ok(Some(artifact))
+    }
+}
+
+#[cfg(test)]
+mod chat_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn chat_crud_archive_delete() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(&dir.path().join("t.db")).unwrap();
+        let chat = db.create_chat("Hello").unwrap();
+        assert_eq!(chat.title, "Hello");
+        assert!(!chat.archived);
+
+        db.add_chat_message(&chat.id, "user", "hola", None, None).unwrap();
+        db.add_chat_message(&chat.id, "assistant", "¡hola!", None, None)
+            .unwrap();
+        let msgs = db.list_chat_messages(&chat.id).unwrap();
+        assert_eq!(msgs.len(), 2);
+
+        db.set_chat_archived(&chat.id, true).unwrap();
+        assert!(db.list_chats(false).unwrap().is_empty());
+        assert_eq!(db.list_chats(true).unwrap().len(), 1);
+
+        db.delete_chat(&chat.id).unwrap();
+        assert!(db.list_chats(true).unwrap().is_empty());
+    }
+
+    #[test]
+    fn chat_compacts_long_context() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(&dir.path().join("t.db")).unwrap();
+        let chat = db.create_chat("Long").unwrap();
+        let big = "x".repeat(25_000);
+        for i in 0..6 {
+            db.add_chat_message(&chat.id, "user", &format!("{i}-{big}"), None, None)
+                .unwrap();
+            db.add_chat_message(&chat.id, "assistant", &format!("a{i}-{big}"), None, None)
+                .unwrap();
+        }
+        let artifacts_dir = dir.path().join("arts");
+        let art = db
+            .compact_chat_context_if_needed(&chat.id, &artifacts_dir)
+            .unwrap();
+        assert!(art.is_some());
+        let left = db.list_chat_messages(&chat.id).unwrap();
+        assert!(left.len() < 12);
+        assert!(left.iter().any(|m| m.role == "system"));
     }
 }

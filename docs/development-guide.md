@@ -3,7 +3,7 @@
 ## Prerequisites
 - Node.js 20+
 - Rust stable (rustup)
-- Ollama installed locally
+- Ollama installed locally (manual install from https://ollama.com/download)
 - Windows 10/11
 
 ## Setup
@@ -22,10 +22,21 @@ npm run playwright:install
 ## Project layout
 See `docs/project-context.md`
 
+## Modes
+- **AIIA Chat** — home `/` and `/chat/:id` (streaming Ollama, tools, historial)
+- **Agentes** — `/agents`, `/create`, `/review/:id`, `/inbox`, `/runs`
+
+## AIIA Chat smoke
+```bash
+# Ollama must be running on :11434
+npm run smoke:chat
+cargo test -p aiia-core chat_
+```
+
 ## Adding a Tauri command
-1. Implement in `crates/aiia-core`
-2. Expose in `apps/desktop/src-tauri/src/lib.rs`
-3. Call from React via `@tauri-apps/api/core` invoke
+1. Implement in `crates/aiia-core` (if persistence) or `apps/desktop/src-tauri`
+2. Expose in `apps/desktop/src-tauri/src/lib.rs` invoke_handler
+3. Call from React via `apps/desktop/src/api.ts`
 
 ## Running agent manually
 ```bash

@@ -529,3 +529,175 @@ pub async fn ollama_chat(
         .map(|s| s.to_string())
         .ok_or_else(|| "Ollama devolvió una respuesta vacía".to_string())
 }
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamEvent {
+    pub stream_id: String,
+    pub delta: String,
+    pub done: bool,
+    #[serde(default)]
+    pub cancelled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn is_stream_cancelled(
+    cancel_set: &std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    stream_id: &str,
+) -> bool {
+    cancel_set
+        .lock()
+        .map(|set| set.contains(stream_id))
+        .unwrap_or(false)
+}
+
+pub async fn ollama_chat_stream(
+    app: AppHandle,
+    stream_id: String,
+    model: String,
+    messages: Vec<serde_json::Value>,
+    temperature: Option<f64>,
+    num_ctx: Option<u32>,
+    cancel_set: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+) -> Result<(), String> {
+    if !ollama_is_running().await {
+        let _ = app.emit(
+            "chat-stream",
+            ChatStreamEvent {
+                stream_id: stream_id.clone(),
+                delta: String::new(),
+                done: true,
+                cancelled: false,
+                error: Some(
+                    "Ollama no está activo. Ve a Ajustes e inicia Ollama antes de continuar."
+                        .to_string(),
+                ),
+            },
+        );
+        return Err(
+            "Ollama no está activo. Ve a Ajustes e inicia Ollama antes de continuar.".to_string(),
+        );
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(900))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "options": {
+            "temperature": temperature.unwrap_or(0.7),
+            "num_ctx": num_ctx.unwrap_or(8192),
+        }
+    });
+
+    let res = client
+        .post(format!("{OLLAMA_API}/api/chat"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| map_ollama_fetch_error(&e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        let err = if text.is_empty() {
+            format!("Ollama rechazó la petición (HTTP {})", status.as_u16())
+        } else {
+            format!("Ollama rechazó la petición: {text}")
+        };
+        let _ = app.emit(
+            "chat-stream",
+            ChatStreamEvent {
+                stream_id: stream_id.clone(),
+                delta: String::new(),
+                done: true,
+                cancelled: false,
+                error: Some(err.clone()),
+            },
+        );
+        return Err(err);
+    }
+
+    use futures_util::StreamExt;
+    let mut stream = res.bytes_stream();
+    let mut buffer = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        if is_stream_cancelled(&cancel_set, &stream_id) {
+            let _ = cancel_set.lock().map(|mut set| set.remove(&stream_id));
+            let _ = app.emit(
+                "chat-stream",
+                ChatStreamEvent {
+                    stream_id: stream_id.clone(),
+                    delta: String::new(),
+                    done: true,
+                    cancelled: true,
+                    error: None,
+                },
+            );
+            return Ok(());
+        }
+
+        let chunk = chunk.map_err(|e| map_ollama_fetch_error(&e))?;
+        buffer.extend_from_slice(&chunk);
+        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line_bytes);
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(delta) = parsed
+                    .pointer("/message/content")
+                    .and_then(|c| c.as_str())
+                {
+                    if !delta.is_empty() {
+                        let _ = app.emit(
+                            "chat-stream",
+                            ChatStreamEvent {
+                                stream_id: stream_id.clone(),
+                                delta: delta.to_string(),
+                                done: false,
+                                cancelled: false,
+                                error: None,
+                            },
+                        );
+                    }
+                }
+                if parsed.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+                    let _ = cancel_set.lock().map(|mut set| set.remove(&stream_id));
+                    let _ = app.emit(
+                        "chat-stream",
+                        ChatStreamEvent {
+                            stream_id: stream_id.clone(),
+                            delta: String::new(),
+                            done: true,
+                            cancelled: false,
+                            error: None,
+                        },
+                    );
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    let _ = cancel_set.lock().map(|mut set| set.remove(&stream_id));
+    let _ = app.emit(
+        "chat-stream",
+        ChatStreamEvent {
+            stream_id,
+            delta: String::new(),
+            done: true,
+            cancelled: false,
+            error: None,
+        },
+    );
+    Ok(())
+}

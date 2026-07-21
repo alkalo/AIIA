@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { Chat } from "./pages/Chat";
 import { Dashboard } from "./pages/Dashboard";
 import { CreateAgent } from "./pages/CreateAgent";
 import { ReviewAgent } from "./pages/ReviewAgent";
@@ -29,7 +30,9 @@ function App() {
     <HashRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Chat />} />
+          <Route path="/chat/:id" element={<Chat />} />
+          <Route path="/agents" element={<Dashboard />} />
           <Route path="/create" element={<CreateAgent />} />
           <Route path="/review/:id" element={<ReviewAgent />} />
           <Route path="/inbox" element={<Inbox />} />

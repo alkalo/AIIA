@@ -2,7 +2,7 @@
   "name": "aiia",
   "version": "0.1.14",
   "private": true,
-  "description": "AIIA - Local AI agents for search and data collection",
+  "description": "AIIA - Local AI chat and search agents",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -14,6 +14,7 @@
     "tauri": "npm run tauri -w @aiia/desktop",
     "tauri:dev": "powershell -ExecutionPolicy Bypass -File scripts/predev.ps1",
     "tauri:build": "node scripts/bundle-runners.mjs && node scripts/bundle-update-helper.mjs && npm run tauri build -w @aiia/desktop",
+    "smoke:chat": "node scripts/smoke-chat.mjs",
     "lint": "npm run build:packages",
     "playwright:install": "npm exec playwright install chromium --prefix packages/scraper"
   },

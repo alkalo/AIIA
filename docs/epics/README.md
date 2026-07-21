@@ -27,3 +27,22 @@
 - E6-S1: Templates + feedback loop
 - E6-S2: Retention cleanup
 - E6-S3: GitHub Actions MSI
+
+# Epic 7: AIIA Chat — **Done**
+- E7-S1: BMAD + shell UI (home Chat, rutas `/agents`, nav sidebar estilo ChatGPT, i18n/tagline)
+- E7-S2: Persistencia SQLite (`chats`, `chat_messages`, `chat_artifacts`) + Tauri CRUD
+- E7-S3: Streaming Ollama (`chatStream`) + modelo por HW + system prompt
+- E7-S4: Historial UX — nuevo / abrir / archivar / borrar
+- E7-S5: Contexto largo → artefacto local
+- E7-S6: Tools web en chat (DuckDuckGo + fetch URL vía scraper)
+- E7-S7: Bridge chat → draft AgentSpec + review
+- E7-S8: Convivencia chat + run agente en paralelo
+- E7-S9: Pulido E2E — onboarding, errores Ollama, smoke localhost
+
+# Epic 8: AIIA Chat local parity — **Done**
+- E8-S1: Vision (adjuntar imágenes + modelo VL Ollama)
+- E8-S2: Generación de imágenes local (A1111/Forge API)
+- E8-S3: Export chat Markdown
+- E8-S4: Python acotado (timeout)
+- Fuera: plugins, GPT store, cloud
+

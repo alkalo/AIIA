@@ -223,6 +223,45 @@ pub struct CredentialRecord {
 
 pub const MAX_PUBLISHED_AGENTS: usize = 10;
 
+/// Soft limit for in-thread chat context before older turns become artifacts.
+pub const CHAT_CONTEXT_CHAR_LIMIT: usize = 100_000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRecord {
+    pub id: String,
+    pub title: String,
+    pub archived: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessageRecord {
+    pub id: String,
+    pub chat_id: String,
+    pub role: String,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+    /// Absolute paths to attached/generated images for this message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatArtifactRecord {
+    pub id: String,
+    pub chat_id: String,
+    pub name: String,
+    pub path: String,
+    pub size_bytes: i64,
+    pub created_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

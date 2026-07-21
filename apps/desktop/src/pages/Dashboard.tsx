@@ -146,9 +146,14 @@ export function Dashboard() {
     <div>
       <div className="page-header">
         <h2>{t("dashboard.title")}</h2>
-        <span className="badge">
-          {t("dashboard.slots", { count: agentLimits.published, max: agentLimits.max })}
-        </span>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+          <Link to="/" className="btn btn-sm btn-outline">
+            {t("nav.chat")}
+          </Link>
+          <span className="badge">
+            {t("dashboard.slots", { count: agentLimits.published, max: agentLimits.max })}
+          </span>
+        </div>
       </div>
 
       {queueHint && <p className="hint-text">{queueHint}</p>}

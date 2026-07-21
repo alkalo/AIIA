@@ -165,7 +165,7 @@ export function CreateAgent() {
     setError("");
     try {
       await api.deleteAgent(editId);
-      navigate("/");
+      navigate("/agents");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

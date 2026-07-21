@@ -1,6 +1,12 @@
 .layout {
   display: flex;
   min-height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.layout-chat {
+  height: 100vh;
 }
 
 .sidebar {
@@ -73,4 +79,12 @@
   flex: 1;
   padding: 2rem;
   overflow-y: auto;
+}
+
+.layout-chat .content-chat {
+  padding: 0;
+  overflow: hidden;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }

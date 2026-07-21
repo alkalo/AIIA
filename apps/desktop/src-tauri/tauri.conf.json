@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AIIA",
+        "title": "AIIA — Chat & Agents",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -19,7 +19,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/AIIA/**", "$APPLOCALDATA/AIIA/**", "**"]
+      }
     }
   },
   "bundle": {
