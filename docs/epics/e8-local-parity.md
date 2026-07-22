@@ -14,7 +14,7 @@ Paridad local con capacidades tipo ChatGPT **sin** plugins, GPT store ni cloud: 
 | E8-S2 | Gen. imágenes local (A1111/Forge `:7860`/`:7861`) | Done — tool `generate_image` |
 | E8-S3 | Export chat Markdown | Done — `export_chat_markdown` + abrir ruta |
 | E8-S4 | Python acotado (timeout + bloqueos básicos) | Done — tool `run_python` |
-| E8-S5 | Modos de chat (auto / instantáneo / eficaz / pro) | Done — profundidad búsqueda + thinking |
+| E8-S5 | Modos de chat (auto / instantáneo / eficaz / pro / máx) | Done — profundidad búsqueda + thinking |
 
 ## Fuera de alcance
 Plugins, GPT store, APIs cloud de imagen/visión, sandbox OS completo.

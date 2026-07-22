@@ -20,6 +20,7 @@ import {
   shouldStopWaves,
   geminiModelsForEffort,
   GeminiClient,
+  defaultLlmTimeoutMs,
   type EffortConfig,
   type EffortLevel,
   type ResearchProfile,
@@ -54,9 +55,9 @@ import {
   isLowQualityGrantUrl,
   resolveOpportunityUrl,
 } from "./result-quality.js";
-import { sectorExpansionQueries } from "./sector-sources.js";
+import { sectorExpansionQueries, jobPortalDeepLinkSeeds } from "./sector-sources.js";
 import { grantExpansionQueries, grantSeedQueries } from "./grant-sources.js";
-import { isGrantTarget } from "./opportunity-subtype.js";
+import { isGrantTarget, isJobTarget } from "./opportunity-subtype.js";
 import { sortByDeadlineAsc } from "./deadline.js";
 
 const GRANT_WAVE_FALLBACKS = [
@@ -207,7 +208,10 @@ export class Executor {
     scraperOptions?: ScraperOptions
   ): Promise<{ results: ExtractedItem[]; summary: string }> {
     const hw = await detectHardware();
-    if (this.ollama instanceof GeminiClient) {
+    const listed = await this.ollama.listModels().catch(() => [] as string[]);
+    const usingGemini =
+      this.ollama instanceof GeminiClient || listed.some((m) => m.startsWith("gemini"));
+    if (usingGemini) {
       const models = geminiModelsForEffort(effort);
       this.plannerModel = models.plannerModel;
       this.extractorModel = models.extractorModel;
@@ -269,7 +273,7 @@ export class Executor {
       "Configuración del agente",
       [
         `Agente: ${spec.name}`,
-        `Modo: ${effort} · provider=${this.ollama instanceof GeminiClient ? "gemini" : "local"} · perfil ${hw.profile} · ${hw.cpuCores} núcleos · ${hw.totalRamGb} GB RAM`,
+        `Modo: ${effort} · provider=${usingGemini ? "gemini" : "local"} · perfil ${hw.profile} · ${hw.cpuCores} núcleos · ${hw.totalRamGb} GB RAM`,
         `Modelos: plan=${this.plannerModel}, extract=${this.extractorModel}${this.criticModel ? `, critic=${this.criticModel}` : ""}`,
         `Estrategia: olas=${profile.searchWaves}, rank IA=${profile.llmRank ? "sí" : "no"}, fetch=${profile.fetchPolicy}, extract=${profile.extractPolicy}`,
         `Límite de enlaces: ${maxSources}${searchLimits.fromAgentConfig ? " (configurado en agente)" : ` (modo ${effort})`}`,
@@ -298,6 +302,21 @@ export class Executor {
     this.searchLocale = searchLocale;
 
     const seedSources = await this.collectSeedSources(spec, log);
+    // Job agents: always inject portal deep-links so a dead SERP cannot yield zero coverage.
+    if (isJobTarget(spec) && !isGrantTarget(spec)) {
+      const portals = jobPortalDeepLinkSeeds(spec);
+      for (const s of portals) {
+        seedSources.push({ title: s.title, url: s.url, snippet: s.snippet });
+      }
+      if (portals.length > 0) {
+        log(
+          LogAction.WEB_SEARCH,
+          `Semillas de portales de empleo: ${portals.length}`,
+          undefined,
+          "searching"
+        );
+      }
+    }
     let rankedSources: RankedSource[] = seedSources.length
       ? await rankSources(
           dedupeHits(seedSources),
@@ -1079,7 +1098,7 @@ Source URL: ${result.url}`;
           temperature: Math.min(0.3, cfg.temperature),
           format: "json",
           numCtx: cfg.numCtx,
-          timeoutMs: 90_000,
+          timeoutMs: defaultLlmTimeoutMs(this.extractorModel),
         }
       );
       const parsed = normalizeExtractedItem(

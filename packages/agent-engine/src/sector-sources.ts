@@ -139,3 +139,69 @@ export function sectorExpansionQueries(
 
   return out.slice(0, count);
 }
+
+export type JobPortalSeed = { title: string; url: string; snippet: string };
+
+/**
+ * Deep-link portal seeds so job agents never finish with zero sources when SERP is blocked.
+ * Mirrors chat `opportunity_portal_seeds` / `jobPortalSeeds`.
+ */
+export function jobPortalDeepLinkSeeds(spec: AgentSpec): JobPortalSeed[] {
+  if (!isJobTarget(spec) || isGrantTarget(spec)) return [];
+  const core = coreKeywords(spec, 5) || "jobs";
+  const enc = encodeURIComponent(core);
+  const encEs = encodeURIComponent(
+    core.replace(/\bremote\b/gi, "remoto").replace(/\bspain\b/gi, "España")
+  );
+  const es = isSpanish(spec);
+  const seeds: JobPortalSeed[] = [
+    {
+      title: `LinkedIn Jobs — ${core}`,
+      url: `https://www.linkedin.com/jobs/search/?keywords=${enc}${es ? "&location=Spain&f_WT=2" : ""}`,
+      snippet: "Portal seed: LinkedIn Jobs search.",
+    },
+    {
+      title: `Indeed — ${core}`,
+      url: es
+        ? `https://es.indeed.com/jobs?q=${enc}&l=Espa%C3%B1a`
+        : `https://www.indeed.com/jobs?q=${enc}`,
+      snippet: "Portal seed: Indeed.",
+    },
+    {
+      title: `Remote OK — ${core}`,
+      url: `https://remoteok.com/remote-jobs?search=${enc}`,
+      snippet: "Portal seed: Remote OK.",
+    },
+    {
+      title: `We Work Remotely — ${core}`,
+      url: `https://weworkremotely.com/remote-jobs/search?term=${enc}`,
+      snippet: "Portal seed: We Work Remotely.",
+    },
+  ];
+  if (es) {
+    seeds.push(
+      {
+        title: `InfoJobs — ${core}`,
+        url: `https://www.infojobs.net/jobsearch/search-results/list.xhtml?keyword=${encEs}`,
+        snippet: "Portal seed: InfoJobs España.",
+      },
+      {
+        title: `Tecnoempleo — ${core}`,
+        url: `https://www.tecnoempleo.com/busqueda-empleo.php?te=${encEs}`,
+        snippet: "Portal seed: Tecnoempleo.",
+      },
+      {
+        title: `Jooble España — ${core}`,
+        url: `https://es.jooble.org/SearchResult?ukw=${enc}`,
+        snippet: "Portal seed: Jooble.",
+      }
+    );
+  } else {
+    seeds.push({
+      title: `Glassdoor — ${core}`,
+      url: `https://www.glassdoor.com/Job/jobs.htm?sc.keyword=${enc}`,
+      snippet: "Portal seed: Glassdoor.",
+    });
+  }
+  return seeds;
+}

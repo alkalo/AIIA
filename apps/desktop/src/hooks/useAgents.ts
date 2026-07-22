@@ -29,6 +29,7 @@ export function useRunProgress(agentId: string | null, enabled = true) {
     phase: string;
     percent: number;
     message: string;
+    runId?: string;
     thinkingStep?: string;
     budgetUsedSec?: number;
   } | null>(null);
@@ -52,6 +53,7 @@ export function useRunProgress(agentId: string | null, enabled = true) {
           phase: p.phase,
           percent: Math.round(p.percent),
           message: p.message,
+          runId: p.runId,
           thinkingStep: p.thinkingStep,
           budgetUsedSec: p.budgetUsedSec,
         });

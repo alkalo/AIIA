@@ -60,6 +60,48 @@
   gap: 0.5rem;
 }
 
+.ai-provider-select {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ai-provider-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.ai-provider-label select {
+  width: 100%;
+}
+
+.ai-provider-hint {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.sidebar .ai-provider-select {
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.page-header .ai-provider-select {
+  min-width: 160px;
+}
+
+.page-header .ai-provider-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.page-header .ai-provider-hint {
+  display: none;
+}
+
 .lang-switch button {
   flex: 1;
   padding: 0.4rem;

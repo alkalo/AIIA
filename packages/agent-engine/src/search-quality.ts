@@ -17,7 +17,7 @@ export function effectiveMinScore(effort: EffortLevel, specMinScore: number): nu
     medium: 50,
     high: 52,
     super_high: 55,
-    ultra_high: 55,
+    ultra_high: 48,
   };
   return Math.min(specMinScore, caps[effort] ?? specMinScore);
 }

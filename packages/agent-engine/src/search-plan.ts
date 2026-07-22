@@ -1,5 +1,5 @@
-import type { LlmClient } from "@aiia/ollama-client";
-import type { ResearchProfile } from "@aiia/ollama-client";
+import type { LlmClient, ResearchProfile } from "@aiia/ollama-client";
+import { defaultLlmTimeoutMs } from "@aiia/ollama-client";
 import type { AgentSpec } from "./types.js";
 import { buildQueriesFromPrompt } from "./query-replan.js";
 import { resolveTemplateId } from "./templates.js";
@@ -64,7 +64,7 @@ Return ONLY valid JSON.`,
           content: `Goal: ${spec.prompt}\nCriteria: ${spec.filters.criteria}\nTemplate: ${resolveTemplateId((spec.templateId ?? "custom") as import("./types.js").TemplateId)}`,
         },
       ],
-      { model: plannerModel, temperature: 0.35, format: "json", numCtx, timeoutMs: 90_000 }
+      { model: plannerModel, temperature: 0.35, format: "json", numCtx, timeoutMs: defaultLlmTimeoutMs(plannerModel) }
     );
     const parsed = (coerceJsonObject<Partial<SearchPlan>>(response) ?? {}) as Partial<SearchPlan>;
     const queries: PlannedQuery[] = Array.isArray(parsed.queries)
@@ -136,7 +136,7 @@ If coverage is good enough, sufficient=true and newQueries=[]. Return ONLY JSON.
           content: `Goal: ${spec.prompt}\nCoverage criteria: ${plan.coverageCriteria}\nFound ${collected.length} sources:\n${JSON.stringify(sample)}`,
         },
       ],
-      { model: plannerModel, temperature: 0.3, format: "json", numCtx, timeoutMs: 90_000 }
+      { model: plannerModel, temperature: 0.3, format: "json", numCtx, timeoutMs: defaultLlmTimeoutMs(plannerModel) }
     );
     const parsed = (coerceJsonObject<CoverageAnalysis>(response) ?? {
       sufficient: true,

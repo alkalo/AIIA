@@ -7,10 +7,13 @@ import type { EffortLevel } from "@aiia/agent-engine/browser";
 import { useAgents, useRunProgress } from "../hooks/useAgents";
 import { api } from "../api";
 import { ProgressBar } from "../components/ProgressBar";
+import { AiProviderSelect } from "../components/AiProviderSelect";
+import { useAiProvider } from "../hooks/useAiProvider";
 
 export function Dashboard() {
   const { t } = useTranslation();
   const { agents, loading, refresh } = useAgents();
+  const { provider } = useAiProvider();
   const [agentLimits, setAgentLimits] = useState({ published: 0, max: 5 });
   const [trackedAgentId, setTrackedAgentId] = useState<string | null>(null);
   const [showProgress, setShowProgress] = useState(false);
@@ -24,12 +27,28 @@ export function Dashboard() {
     summary?: string;
   } | null>(null);
   const { progress, isFinished } = useRunProgress(trackedAgentId, showProgress);
+  const [cancellingRun, setCancellingRun] = useState(false);
 
   const dismissProgress = useCallback(() => {
     setShowProgress(false);
     setTrackedAgentId(null);
     setRunInProgress(false);
   }, []);
+
+  const handleCancelRun = useCallback(async () => {
+    const runId = progress?.runId;
+    if (!runId) return;
+    if (!window.confirm(t("runs.cancelConfirm"))) return;
+    setCancellingRun(true);
+    try {
+      await api.cancelRun(runId);
+      setRunInProgress(false);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCancellingRun(false);
+    }
+  }, [progress?.runId, t]);
 
   useEffect(() => {
     api.getAgentLimits().then(setAgentLimits).catch(() => {});
@@ -84,6 +103,11 @@ export function Dashboard() {
       setQueueHint("");
     }).then((fn) => unsubs.push(fn));
 
+    listen("agent-run-cancelled", () => {
+      setRunInProgress(false);
+      refresh({ silent: true });
+    }).then((fn) => unsubs.push(fn));
+
     return () => unsubs.forEach((fn) => fn());
   }, [refresh]);
 
@@ -92,11 +116,11 @@ export function Dashboard() {
   }, [isFinished]);
 
   const handleDelete = async (id: string, name: string) => {
-    if (runInProgress && trackedAgentId === id) {
-      window.alert(t("dashboard.deleteRunning"));
-      return;
-    }
-    if (!window.confirm(t("dashboard.deleteConfirm", { name }))) return;
+    const running = runInProgress && trackedAgentId === id;
+    const msg = running
+      ? t("dashboard.deleteRunningConfirm", { name })
+      : t("dashboard.deleteConfirm", { name });
+    if (!window.confirm(msg)) return;
     try {
       await api.deleteAgent(id);
       if (trackedAgentId === id) dismissProgress();
@@ -146,7 +170,8 @@ export function Dashboard() {
     <div>
       <div className="page-header">
         <h2>{t("dashboard.title")}</h2>
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+          <AiProviderSelect compact disabled={runInProgress} />
           <Link to="/" className="btn btn-sm btn-outline">
             {t("nav.chat")}
           </Link>
@@ -155,6 +180,11 @@ export function Dashboard() {
           </span>
         </div>
       </div>
+      <p className="hint-text" style={{ marginTop: "-0.5rem", marginBottom: "1rem" }}>
+        {t("dashboard.providerHint", {
+          provider: provider === "gemini" ? t("aiProvider.gemini") : t("aiProvider.local"),
+        })}
+      </p>
 
       {queueHint && <p className="hint-text">{queueHint}</p>}
 
@@ -203,7 +233,14 @@ export function Dashboard() {
             thinkingStep={progress?.thinkingStep}
             budgetUsedSec={progress?.budgetUsedSec}
             onDismiss={dismissProgress}
+            onCancel={progress?.runId ? handleCancelRun : undefined}
+            cancelling={cancellingRun}
           />
+          {progress?.phase === "cancelled" && (
+            <p className="hint-text" style={{ marginTop: "0.5rem" }}>
+              <Link to="/runs">{t("dashboard.openRunsToDelete")}</Link>
+            </p>
+          )}
         </div>
       )}
 

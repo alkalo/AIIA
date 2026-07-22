@@ -75,4 +75,4 @@ Todo local-first: datos y credenciales en el PC. IA por defecto **Ollama** (grat
 - Generación de imágenes local (API Automatic1111/Forge en localhost si está disponible)
 - Export de conversación a Markdown
 - Intérprete Python acotado (timeout, sin cloud)
-- Modos de chat: Automático / Instantáneo / Eficaz / Pro (profundidad de búsqueda y pensamiento)
+- Modos de chat: Automático / Instantáneo / Eficaz / Pro / Máx (profundidad de búsqueda y pensamiento)

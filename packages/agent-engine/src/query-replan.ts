@@ -1,4 +1,5 @@
 import type { EffortLevel, LlmClient } from "@aiia/ollama-client";
+import { defaultLlmTimeoutMs } from "@aiia/ollama-client";
 import type { AgentSpec, TemplateId } from "./types.js";
 import { isGrantTarget, isJobTarget, resolveOpportunitySubtype } from "./opportunity-subtype.js";
 import { resolveTemplateId } from "./templates.js";
@@ -131,7 +132,7 @@ export async function replanSearchQueries(
             content: `Goal: ${spec.prompt}\nCriteria: ${spec.filters.criteria}\nTemplate: ${resolveTemplateId((spec.templateId ?? "custom") as TemplateId)}\nAvoid generic queries like "empleo" or "jobs remote" alone.`,
           },
         ],
-        { model: plannerModel, temperature: 0.35, format: "json", numCtx: 4096, timeoutMs: 90_000 }
+        { model: plannerModel, temperature: 0.35, format: "json", numCtx: 4096, timeoutMs: defaultLlmTimeoutMs(plannerModel) }
       );
       const parsed = coerceJsonArray<unknown>(response);
       const ai = parsed.filter((q): q is string => typeof q === "string" && q.trim().length > 3);

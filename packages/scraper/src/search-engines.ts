@@ -607,10 +607,14 @@ export function enginesForEffort(
   // Mojeek first: Bing HTTP is often bot-poisoned; keep Bing for Playwright fallback later.
   switch (effort) {
     case "low":
-      return ["mojeek", "duckduckgo-lite", "bing"];
+      return ["mojeek", "duckduckgo-lite"];
     case "medium":
       return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "bing"];
-    default:
+    case "high":
+      return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "brave", "bing"];
+    case "super_high":
+      return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "brave", "ecosia", "bing"];
+    case "ultra_high":
       return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "brave", "ecosia", "bing"];
   }
 }

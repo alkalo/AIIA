@@ -1,4 +1,5 @@
 import type { LlmClient, ResearchProfile } from "@aiia/ollama-client";
+import { defaultLlmTimeoutMs } from "@aiia/ollama-client";
 import type { AgentSpec, SearchResult } from "./types.js";
 import { rankSearchResults, type SearchHit } from "./search-quality.js";
 import { coerceJsonArray } from "./json-utils.js";
@@ -66,7 +67,7 @@ Prioritize authoritative sources matching the goal. Prefer individual grant/call
           )}`,
         },
       ],
-      { model: plannerModel, temperature: 0.25, format: "json", numCtx, timeoutMs: 90_000 }
+      { model: plannerModel, temperature: 0.25, format: "json", numCtx, timeoutMs: defaultLlmTimeoutMs(plannerModel) }
     );
     const scored = coerceJsonArray<LlmRankItem>(response);
     if (scored.length === 0) return applyFetchPolicy(heuristic, profile, limit);

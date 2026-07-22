@@ -9,6 +9,7 @@ import {
   prepareOllamaForPlanner,
 } from "../ollama-desktop";
 import { api, type CredentialSummary, type OllamaSetupProgress, type UpdateStatus, type AppInfo, type AiProviderId } from "../api";
+import { useAiProvider } from "../hooks/useAiProvider";
 
 type WizardStep = "idle" | "plan" | "connect";
 
@@ -31,8 +32,12 @@ export function Settings() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [autoUpdate, setAutoUpdate] = useState(false);
   const [updateError, setUpdateError] = useState("");
-  const [aiProvider, setAiProvider] = useState<AiProviderId>("local");
-  const [hasGeminiKey, setHasGeminiKey] = useState(false);
+  const {
+    provider: aiProvider,
+    hasGeminiKey,
+    setProvider,
+    refresh: refreshProvider,
+  } = useAiProvider();
   const [geminiKeyInput, setGeminiKeyInput] = useState("");
   const [geminiBusy, setGeminiBusy] = useState(false);
   const [geminiMsg, setGeminiMsg] = useState("");
@@ -61,10 +66,7 @@ export function Settings() {
     api.getSetting("retention_days").then((v) => v && setRetention(v));
     api.getAppInfo().then(setAppInfo);
     api.getUpdatePrefs().then((prefs) => setAutoUpdate(prefs.autoUpdateOnStartup));
-    api.getAiProviderStatus().then((s) => {
-      setAiProvider(s.provider === "gemini" ? "gemini" : "local");
-      setHasGeminiKey(s.hasGeminiKey);
-    });
+    void refreshProvider();
     refreshCredentials();
 
     let unlistenUpdate: (() => void) | undefined;
@@ -155,23 +157,12 @@ export function Settings() {
     await api.setUpdatePrefs(enabled);
   };
 
-  const applyProviderStatus = (s: { provider: string; hasGeminiKey: boolean }) => {
-    setAiProvider(s.provider === "gemini" ? "gemini" : "local");
-    setHasGeminiKey(s.hasGeminiKey);
-  };
-
   const handleProviderChange = async (next: AiProviderId) => {
     setGeminiErr("");
     setGeminiMsg("");
-    if (next === "gemini" && !hasGeminiKey) {
+    const ok = await setProvider(next);
+    if (!ok) {
       setGeminiErr(t("settings.geminiNeedKey"));
-      return;
-    }
-    try {
-      const s = await api.setAiProvider(next);
-      applyProviderStatus(s);
-    } catch (e) {
-      setGeminiErr(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -181,8 +172,8 @@ export function Settings() {
     setGeminiErr("");
     setGeminiMsg("");
     try {
-      const s = await api.setGeminiApiKey(geminiKeyInput.trim());
-      applyProviderStatus(s);
+      await api.setGeminiApiKey(geminiKeyInput.trim());
+      await refreshProvider();
       setGeminiKeyInput("");
       setGeminiMsg(t("settings.geminiKeySaved"));
     } catch (e) {
@@ -197,8 +188,8 @@ export function Settings() {
     setGeminiErr("");
     setGeminiMsg("");
     try {
-      const s = await api.clearGeminiApiKey();
-      applyProviderStatus(s);
+      await api.clearGeminiApiKey();
+      await refreshProvider();
       setGeminiMsg("");
     } catch (e) {
       setGeminiErr(e instanceof Error ? e.message : String(e));

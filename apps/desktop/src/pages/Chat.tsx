@@ -15,8 +15,6 @@ import {
   isOllamaNotInstalledError,
   OLLAMA_DOWNLOAD_URL,
   plannerModelForProfile,
-  GEMINI_FLASH,
-  GEMINI_PRO,
 } from "../ollama-desktop";
 import { ChatMarkdown } from "../components/ChatMarkdown";
 import {
@@ -24,9 +22,22 @@ import {
   type ChatModeId,
   loadStoredChatMode,
   resolveChatMode,
+  ensureSearchCoverageMode,
+  messageRequiresWebSearch,
+  geminiModelForChatMode,
+  expandWebSearchQueries,
+  jobPortalSeeds,
+  isJobOrListingSearch,
+  looksLikeEmptyMarketAnswer,
+  looksLikeFailedSearchNarrative,
+  hasUsefulPortalLinks,
+  isAntiBotJobBoard,
+  mergeJobPortalSeeds,
+  composeJobPortalAnswer,
   CHAT_MODE_STORAGE_KEY,
 } from "../chatModes";
 import type { AiProviderId } from "../api";
+import { useAiProvider } from "../hooks/useAiProvider";
 import "./Chat.css";
 
 const TOOL_RE =
@@ -40,7 +51,50 @@ type UiMessage = {
   streaming?: boolean;
 };
 
-type PendingImage = { name: string; preview: string; base64: string };
+type PendingAttachment =
+  | { kind: "image"; name: string; preview: string; base64: string }
+  | { kind: "file"; name: string; text: string; mimeType: string };
+
+const CHAT_MAX_ATTACHMENTS = 4;
+const CHAT_TEXT_MAX_BYTES = 512_000;
+const CHAT_TEXT_MAX_CHARS = 12_000;
+const CHAT_TEXT_EXTS = new Set([
+  ".txt",
+  ".md",
+  ".csv",
+  ".json",
+  ".xml",
+  ".html",
+  ".htm",
+  ".log",
+  ".yaml",
+  ".yml",
+  ".tsv",
+  ".py",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".rs",
+  ".toml",
+  ".ini",
+  ".cfg",
+]);
+
+function isChatTextFile(file: File): boolean {
+  if (file.size > CHAT_TEXT_MAX_BYTES) return false;
+  const name = file.name.toLowerCase();
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  if (CHAT_TEXT_EXTS.has(ext)) return true;
+  if (file.type.startsWith("text/")) return true;
+  if (file.type === "application/json" || file.type === "application/csv") return true;
+  return false;
+}
+
+function truncateChatFileText(text: string): string {
+  if (text.length <= CHAT_TEXT_MAX_CHARS) return text;
+  return `${text.slice(0, CHAT_TEXT_MAX_CHARS)}\n\n[... truncated ...]`;
+}
 
 function localImageSrc(path: string): string {
   try {
@@ -135,14 +189,18 @@ export function Chat() {
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [textModel, setTextModel] = useState("");
   const [chatMode, setChatMode] = useState<ChatModeId>(() => loadStoredChatMode());
   const [activeModeLabel, setActiveModeLabel] = useState("");
-  const [aiProvider, setAiProvider] = useState<AiProviderId>("local");
-  const [hasGeminiKey, setHasGeminiKey] = useState(false);
+  const {
+    provider: aiProvider,
+    hasGeminiKey,
+    setProvider: setSharedProvider,
+    refresh: refreshProvider,
+  } = useAiProvider();
   const modeRef = useRef<ChatModeConfig>(resolveChatMode("auto", ""));
-  const providerRef = useRef<AiProviderId>("local");
+  const providerRef = useRef<AiProviderId>(aiProvider);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -150,6 +208,22 @@ export function Chat() {
   const skipNextLoadRef = useRef(false);
   const activeStreamIdRef = useRef<string | null>(null);
   const stopRequestedRef = useRef(false);
+  const lastSearchHitsRef = useRef<{ title: string; url: string; snippet: string }[]>([]);
+  /** Original user text for job asks — tool queries may drop "videojuegos" and miss gaming seeds. */
+  const lastUserJobQueryRef = useRef("");
+
+  const formatHitsBlock = (hits: { title: string; url: string; snippet: string }[]) =>
+    hits.map((h, i) => `${i + 1}. ${h.title}\n${h.url}\n${h.snippet || ""}`).join("\n\n");
+
+  const preferPortalHits = <T extends { url: string }>(hits: T[]): T[] => {
+    const score = (u: string) =>
+      /hitmarker\.net|remotegamejobs\.com|gamesjobsdirect\.com|workwithindies\.com|linkedin\.com\/jobs|infojobs\.net|indeed\.com|remoteok\.com|weworkremotely\.com|jooble\.org|tecnoempleo\.com|glassdoor\.com/i.test(
+        u
+      )
+        ? 0
+        : 1;
+    return [...hits].sort((a, b) => score(a.url) - score(b.url));
+  };
 
   const refreshChats = useCallback(async () => {
     try {
@@ -174,18 +248,18 @@ export function Chat() {
 
   const refreshOllama = useCallback(async () => {
     try {
+      await refreshProvider();
       const [hw, status, providerStatus] = await Promise.all([
         api.getHardwareInfo(),
         api.getOllamaStatus(),
         api.getAiProviderStatus(),
       ]);
       const provider: AiProviderId = providerStatus.provider === "gemini" ? "gemini" : "local";
-      setAiProvider(provider);
       providerRef.current = provider;
-      setHasGeminiKey(providerStatus.hasGeminiKey);
       if (provider === "gemini") {
-        setTextModel(GEMINI_FLASH);
-        setModel(GEMINI_FLASH);
+        const geminiModel = geminiModelForChatMode(chatMode);
+        setTextModel(geminiModel);
+        setModel(geminiModel);
         setOllamaReady(true);
         return;
       }
@@ -195,37 +269,42 @@ export function Chat() {
       setModel(recommended);
       setOllamaReady(status.installed && status.running);
     } catch {
+      if (providerRef.current === "gemini") {
+        const geminiModel = geminiModelForChatMode(chatMode);
+        setTextModel(geminiModel);
+        setModel(geminiModel);
+        setOllamaReady(true);
+        return;
+      }
       setOllamaReady(false);
       setModel((m) => m || "qwen2.5:7b");
       setTextModel((m) => m || "qwen2.5:7b");
     }
-  }, []);
+  }, [refreshProvider, chatMode]);
 
   const setProvider = async (next: AiProviderId) => {
     setError("");
-    if (next === "gemini" && !hasGeminiKey) {
+    const ok = await setSharedProvider(next);
+    if (!ok) {
       setError(t("chat.geminiNeedKey"));
       return;
     }
-    try {
-      const s = await api.setAiProvider(next);
-      const provider: AiProviderId = s.provider === "gemini" ? "gemini" : "local";
-      setAiProvider(provider);
-      providerRef.current = provider;
-      setHasGeminiKey(s.hasGeminiKey);
-      await refreshOllama();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
+    providerRef.current = next;
+    // aiProvider effect will call refreshOllama
   };
+
+  useEffect(() => {
+    providerRef.current = aiProvider;
+  }, [aiProvider]);
+
+  // Sidebar / Settings can change provider; resync model (Ollama vs Gemini).
+  useEffect(() => {
+    void refreshOllama();
+  }, [aiProvider, refreshOllama]);
 
   useEffect(() => {
     refreshChats();
   }, [refreshChats]);
-
-  useEffect(() => {
-    void refreshOllama();
-  }, [refreshOllama]);
 
   useEffect(() => {
     if (routeChatId) {
@@ -385,19 +464,74 @@ export function Chat() {
     const mode = modeRef.current;
     if (toolName === "web_search") {
       setToolStatus(t("chat.toolSearch"));
-      const hits = await api.chatWebSearch(
-        args.query || "",
-        mode.searchLimit,
-        mode.searchDepth
+      const primary = (args.query || "").trim();
+      const depth =
+        mode.searchDepth === "instant" && /oferta|empleo|job|remote|remoto|qa/i.test(primary)
+          ? "eficaz"
+          : mode.searchDepth;
+      let hits: { title: string; url: string; snippet: string }[] = [];
+      try {
+        hits = await api.chatWebSearch(primary, mode.searchLimit, depth);
+      } catch {
+        hits = [];
+      }
+      const hasPortals = hits.some((h) =>
+        /linkedin\.com\/jobs|infojobs\.net|indeed\.com|remoteok\.com|weworkremotely\.com|jooble\.org|tecnoempleo\.com|hitmarker\.net|remotegamejobs\.com|gamesjobsdirect\.com|workwithindies\.com/i.test(
+          h.url
+        )
       );
-      let result = hits
-        .map((h, i) => `${i + 1}. ${h.title}\n${h.url}\n${h.snippet}`)
-        .join("\n\n");
-      if (!result) result = "No results.";
 
+      // If thin/empty AND no portal seeds yet, try alternate phrasings before the model gives up.
+      if (hits.length < 5 && !hasPortals && mode.id !== "instant") {
+        const alts = expandWebSearchQueries(primary).slice(1, 8);
+        const deeper = depth === "max" ? "max" : "pro";
+        for (const q of alts) {
+          if (stopRequestedRef.current) break;
+          setToolStatus(t("chat.toolSearch"));
+          try {
+            const more = await api.chatWebSearch(q, mode.searchLimit, deeper);
+            const seen = new Set(hits.map((h) => h.url.toLowerCase()));
+            for (const h of more) {
+              const key = h.url.toLowerCase();
+              if (seen.has(key)) continue;
+              seen.add(key);
+              hits.push(h);
+            }
+          } catch {
+            /* keep going */
+          }
+          if (hits.length >= Math.max(mode.searchLimit, 12)) break;
+        }
+      }
+
+      // Always merge portal deep-links for job asks (tool query + original user message for gaming).
+      const seedQueries = [primary, lastUserJobQueryRef.current].filter(Boolean);
+      for (const sq of seedQueries) {
+        hits = mergeJobPortalSeeds(hits, sq);
+      }
+
+      lastSearchHitsRef.current = preferPortalHits(hits);
+
+      let result = formatHitsBlock(hits);
+      if (!result) {
+        result = `No organic hits yet for query="${primary}".
+IMPORTANT: Do NOT tell the user that no offers exist. Keep searching OR present portal deep-links. Never narrate HTTP errors.`;
+      } else {
+        result += `\n\n[Coverage: ${hits.length} links.
+RULES FOR YOUR ANSWER:
+1) Reply in the SAME language as the user.
+2) Lead with a short list of concrete portal/search URLs (title + URL). Those links ARE the deliverable when pages block scraping.
+3) Do NOT narrate HTTP 403 / fetch failures / "I'll try again later" / strategy essays.
+4) Only fetch_url non-portal article pages if useful. Job boards often block bots — that is normal; still give the user the search URL.
+5) Never invent openings. Prefer: "Abre estos buscadores (pueden pedir login):" + numbered links.]`;
+      }
+
+      // Auto-fetch only non-anti-bot pages (job boards usually return 403 and poison the model).
       if (mode.autoFetchTop > 0 && hits.length > 0) {
         setToolStatus(t("chat.toolFetchDeep"));
-        const top = hits.slice(0, mode.autoFetchTop);
+        const top = preferPortalHits(hits)
+          .filter((h) => !isAntiBotJobBoard(h.url))
+          .slice(0, Math.min(mode.autoFetchTop, 4));
         const pages: string[] = [];
         for (const h of top) {
           if (stopRequestedRef.current) break;
@@ -405,7 +539,9 @@ export function Chat() {
             const body = await api.chatFetchUrl(h.url, mode.fetchChars);
             pages.push(`--- Source: ${h.title}\n${h.url}\n${body}`);
           } catch (e) {
-            pages.push(`--- Source: ${h.title}\n${h.url}\n(fetch failed: ${e})`);
+            pages.push(
+              `--- Source: ${h.title}\n${h.url}\n(Scraping blocked: ${e}. Do NOT tell the user the market is empty — give them this URL to open manually.)`
+            );
           }
         }
         if (pages.length) {
@@ -416,7 +552,21 @@ export function Chat() {
     }
     if (toolName === "fetch_url") {
       setToolStatus(t("chat.toolFetch"));
-      return { result: await api.chatFetchUrl(args.url || "", mode.fetchChars) };
+      const url = args.url || "";
+      if (isAntiBotJobBoard(url)) {
+        return {
+          result: `Job board URL (scraping usually blocked): ${url}
+Do NOT narrate HTTP errors. Give the user this URL to open in their browser (login if needed). That is a valid answer.`,
+        };
+      }
+      try {
+        return { result: await api.chatFetchUrl(url, mode.fetchChars) };
+      } catch (e) {
+        return {
+          result: `Could not scrape ${url} (${e}).
+If this is a job board, present the URL to the user anyway. Do not say there are no jobs.`,
+        };
+      }
     }
     if (toolName === "create_agent") {
       setToolStatus(t("chat.toolAgent"));
@@ -454,7 +604,8 @@ export function Chat() {
     firstText: string,
     history: { role: string; content: string }[],
     chatId: string,
-    chatModel: string
+    chatModel: string,
+    provider: AiProviderId
   ): Promise<{ text: string; images: string[] }> => {
     let current = firstText;
     const convo = [...history];
@@ -462,9 +613,19 @@ export function Chat() {
     const images: string[] = [];
     const mode = modeRef.current;
     const maxHops = mode.maxToolHops;
+    const startedAt = Date.now();
+    const budgetMs = mode.wallClockBudgetSec * 1000;
 
     while (TOOL_RE.test(current) && hops < maxHops) {
       if (stopRequestedRef.current) break;
+      if (Date.now() - startedAt >= budgetMs) {
+        return {
+          text:
+            (stripToolTags(current) || current) +
+            "\n\n[Mode time budget reached — answering with the sources gathered so far.]",
+          images,
+        };
+      }
       hops += 1;
       const match = current.match(TOOL_RE);
       if (!match) break;
@@ -494,11 +655,46 @@ export function Chat() {
         return { text: follow, images };
       }
 
+      if (stopRequestedRef.current) {
+        setToolStatus("");
+        return { text: stripToolTags(current) || current, images };
+      }
+
       convo.push({ role: "assistant", content: current });
       convo.push({
         role: "user",
         content: `Tool result for ${toolName}:\n${result}\n\nContinue your answer for the user. Do not repeat the tool tag unless you need another tool.`,
       });
+
+      if (Date.now() - startedAt >= budgetMs) {
+        convo[convo.length - 1] = {
+          role: "user",
+          content: `Tool result for ${toolName}:\n${result}\n\nMode time budget reached. Give the best final answer now using the tool results. Do not call more tools.`,
+        };
+        setToolStatus(t("chat.toolContinue"));
+        const system = await api.getChatSystemPrompt(mode.systemAddon);
+        try {
+          current = await streamChat(
+            chatModel,
+            [{ role: "system", content: system }, ...convo],
+            updateStreaming,
+            (id) => {
+              activeStreamIdRef.current = id;
+            },
+            { temperature: mode.temperature, numCtx: mode.numCtx, provider }
+          );
+        } catch (e) {
+          if (e instanceof StreamCancelledError) {
+            return {
+              text: stripToolTags(e.partial) || stripToolTags(current),
+              images,
+            };
+          }
+          throw e;
+        }
+        setToolStatus("");
+        return { text: stripToolTags(current) || current, images };
+      }
 
       setToolStatus(t("chat.toolContinue"));
       const system = await api.getChatSystemPrompt(mode.systemAddon);
@@ -510,7 +706,7 @@ export function Chat() {
           (id) => {
             activeStreamIdRef.current = id;
           },
-          { temperature: mode.temperature, numCtx: mode.numCtx, provider: providerRef.current }
+          { temperature: mode.temperature, numCtx: mode.numCtx, provider }
         );
       } catch (e) {
         if (e instanceof StreamCancelledError) {
@@ -529,19 +725,43 @@ export function Chat() {
 
   const addPendingFiles = async (files: FileList | null) => {
     if (!files?.length) return;
-    const next: PendingImage[] = [];
-    for (const file of Array.from(files).slice(0, 4)) {
-      if (!file.type.startsWith("image/")) continue;
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error("read failed"));
-        reader.readAsDataURL(file);
-      });
-      const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
-      next.push({ name: file.name, preview: dataUrl, base64 });
+    const next: PendingAttachment[] = [];
+    let skipped = 0;
+    for (const file of Array.from(files)) {
+      if (pendingAttachments.length + next.length >= CHAT_MAX_ATTACHMENTS) break;
+      if (file.type.startsWith("image/")) {
+        if (file.size > 12 * 1024 * 1024) {
+          skipped += 1;
+          continue;
+        }
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("read failed"));
+          reader.readAsDataURL(file);
+        });
+        const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+        next.push({ kind: "image", name: file.name, preview: dataUrl, base64 });
+        continue;
+      }
+      if (isChatTextFile(file)) {
+        const raw = await file.text();
+        next.push({
+          kind: "file",
+          name: file.name,
+          text: truncateChatFileText(raw),
+          mimeType: file.type || "text/plain",
+        });
+        continue;
+      }
+      skipped += 1;
     }
-    if (next.length) setPendingImages((prev) => [...prev, ...next].slice(0, 4));
+    if (next.length) {
+      setPendingAttachments((prev) => [...prev, ...next].slice(0, CHAT_MAX_ATTACHMENTS));
+    }
+    if (skipped > 0) {
+      setError(t("chat.attachUnsupported"));
+    }
   };
 
   const exportActive = async () => {
@@ -556,16 +776,24 @@ export function Chat() {
 
   const send = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if ((!text && pendingImages.length === 0) || sending) return;
-    const messageText = text || t("chat.imagePromptFallback");
+    if ((!text && pendingAttachments.length === 0) || sending) return;
+    const hasImages = pendingAttachments.some((a) => a.kind === "image");
+    const hasFiles = pendingAttachments.some((a) => a.kind === "file");
+    const messageText =
+      text ||
+      (hasImages && !hasFiles
+        ? t("chat.imagePromptFallback")
+        : hasFiles
+          ? t("chat.filePromptFallback")
+          : t("chat.imagePromptFallback"));
     sendingRef.current = true;
     stopRequestedRef.current = false;
     activeStreamIdRef.current = null;
     setSending(true);
     setError("");
     setInput("");
-    const attachments = [...pendingImages];
-    setPendingImages([]);
+    const attachments = [...pendingAttachments];
+    setPendingAttachments([]);
     let userPersisted = false;
 
     try {
@@ -596,18 +824,106 @@ export function Chat() {
         }
       }
 
+      const imageAttachments = attachments.filter(
+        (a): a is Extract<PendingAttachment, { kind: "image" }> => a.kind === "image"
+      );
+      const fileAttachments = attachments.filter(
+        (a): a is Extract<PendingAttachment, { kind: "file" }> => a.kind === "file"
+      );
+
       const imagePaths: string[] = [];
-      for (const img of attachments) {
+      for (const img of imageAttachments) {
         const path = await api.saveChatImage(chatId, img.name, img.base64);
         imagePaths.push(path);
+      }
+
+      let contentForModel = messageText;
+      if (fileAttachments.length) {
+        const block = fileAttachments
+          .map(
+            (f, i) =>
+              `--- File ${i + 1}: ${f.name} (${f.mimeType}) ---\n${f.text}`
+          )
+          .join("\n\n");
+        contentForModel = `${messageText}\n\nAttached files:\n${block}`;
+      }
+
+      const mustSearch = messageRequiresWebSearch(messageText);
+      // Clear job/offer intent → portals only (no LLM). Broader JOB_RE still upgrades mode elsewhere.
+      const jobListingAsk = isJobOrListingSearch(messageText);
+      const resolved = ensureSearchCoverageMode(chatMode, messageText);
+      modeRef.current = resolved;
+      setActiveModeLabel(
+        chatMode === "auto" || resolved.id !== chatMode
+          ? t("chat.modeAutoResolved", { mode: t(`chat.mode.${resolved.id}`) })
+          : t(`chat.mode.${resolved.id}`)
+      );
+
+      // Job listing asks: portals only — no LLM (avoids 403 essays). No Ollama/Gemini required.
+      if (jobListingAsk) {
+        lastUserJobQueryRef.current = messageText;
+        const userMsg = await api.addChatMessage(
+          chatId,
+          "user",
+          contentForModel,
+          undefined,
+          imagePaths.length ? imagePaths : undefined
+        );
+        userPersisted = true;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: userMsg.id,
+            role: "user",
+            content: contentForModel,
+            images: imagePaths.length ? imagePaths : undefined,
+          },
+          { id: "streaming", role: "assistant", content: "", streaming: true },
+        ]);
+        setToolStatus(t("chat.toolSearch"));
+        // Optional SERP enrichment (still no LLM). Seeds always win if SERP fails/blocks.
+        let extraHits: { title: string; url: string; snippet: string }[] = [];
+        try {
+          const depth = resolved.searchDepth === "instant" ? "eficaz" : resolved.searchDepth;
+          extraHits = await api.chatWebSearch(
+            messageText,
+            Math.min(resolved.searchLimit, 16),
+            depth
+          );
+        } catch {
+          extraHits = [];
+        }
+        if (stopRequestedRef.current) {
+          setMessages((prev) => prev.filter((m) => !m.streaming));
+          return;
+        }
+        const finalText = composeJobPortalAnswer(
+          messageText,
+          t("chat.emptyMarketFallback"),
+          t("chat.emptyMarketHint"),
+          extraHits
+        );
+        lastSearchHitsRef.current = preferPortalHits(
+          mergeJobPortalSeeds(extraHits, messageText)
+        );
+        updateStreaming(finalText);
+        const saved = await api.addChatMessage(chatId, "assistant", finalText);
+        setMessages((prev) => {
+          const withoutStream = prev.filter((m) => !m.streaming);
+          return [
+            ...withoutStream,
+            { id: saved.id, role: "assistant", content: finalText },
+          ];
+        });
+        await refreshChats();
+        return;
       }
 
       const useVision = imagePaths.length > 0;
       const provider = providerRef.current;
       let chatModel = textModel || model || "qwen2.5:7b";
       if (provider === "gemini") {
-        const resolvedMode = resolveChatMode(chatMode, messageText);
-        chatModel = resolvedMode.id === "pro" ? GEMINI_PRO : GEMINI_FLASH;
+        chatModel = geminiModelForChatMode(resolved.id);
         setModel(chatModel);
         setTextModel(chatModel);
       } else if (useVision) {
@@ -621,18 +937,10 @@ export function Chat() {
       }
       setOllamaReady(true);
 
-      const resolved = resolveChatMode(chatMode, messageText);
-      modeRef.current = resolved;
-      setActiveModeLabel(
-        chatMode === "auto"
-          ? t("chat.modeAutoResolved", { mode: t(`chat.mode.${resolved.id}`) })
-          : t(`chat.mode.${resolved.id}`)
-      );
-
       const userMsg = await api.addChatMessage(
         chatId,
         "user",
-        messageText,
+        contentForModel,
         undefined,
         imagePaths.length ? imagePaths : undefined
       );
@@ -642,13 +950,23 @@ export function Chat() {
         {
           id: userMsg.id,
           role: "user",
-          content: messageText,
+          content: contentForModel,
           images: imagePaths.length ? imagePaths : undefined,
         },
         { id: "streaming", role: "assistant", content: "", streaming: true },
       ]);
 
-      const system = await api.getChatSystemPrompt(resolved.systemAddon);
+      const forceSearchAddon = mustSearch
+        ? `${resolved.systemAddon}
+
+MANDATORY FOR THIS MESSAGE:
+- Reply in the SAME language as the user (Spanish if they wrote Spanish).
+- Prefer delivering clickable portal/search URLs over long process commentary.
+- Job boards often return HTTP 403 to bots — that is normal. Never write essays about fetch failures or "strategies".
+- Final answer format: short intro + numbered list of title + URL (+ one-line tip). Stop when you have solid portals.
+- Do not invent openings. Do not say you will search more later.`
+        : resolved.systemAddon;
+      const system = await api.getChatSystemPrompt(forceSearchAddon);
       const historyRows = await api.listChatMessages(chatId);
       const ollamaMessages: { role: string; content: string; images?: string[] }[] = [
         { role: "system", content: system },
@@ -677,10 +995,45 @@ export function Chat() {
         .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
         .map((m) => ({ role: m.role, content: m.content }));
 
+      lastSearchHitsRef.current = [];
+
+      // Pre-search for explicit web asks so the model always has sources before answering.
+      if (mustSearch) {
+        setToolStatus(t("chat.toolSearch"));
+        try {
+          const pre = await executeTool("web_search", { query: messageText }, historyForTools, chatId);
+          ollamaMessages.push({
+            role: "user",
+            content: `Tool result for web_search:\n${pre.result}\n\nAnswer NOW in the user's language with a numbered list of portal/search URLs (title + link). Do NOT narrate HTTP errors or say you will search more later. Opening those links is how the user sees current openings.`,
+          });
+          historyForTools.push({
+            role: "user",
+            content: `Tool result for web_search:\n${pre.result}`,
+          });
+        } catch {
+          const seeds = jobPortalSeeds(messageText);
+          lastSearchHitsRef.current = seeds;
+          const block = formatHitsBlock(seeds);
+          ollamaMessages.push({
+            role: "user",
+            content: `Tool result for web_search:\n${block}\n\nUsing these portal links, answer with concrete openings: title + URL. Do NOT say there are no online offers.`,
+          });
+          historyForTools.push({
+            role: "user",
+            content: `Tool result for web_search:\n${block}`,
+          });
+        }
+      }
+
+      if (stopRequestedRef.current) {
+        setMessages((prev) => prev.filter((m) => !m.streaming));
+        return;
+      }
+
       let finalText = "";
       let assistantImages: string[] = [];
       try {
-        const full = await streamChat(
+        let full = await streamChat(
           chatModel,
           ollamaMessages,
           updateStreaming,
@@ -689,8 +1042,13 @@ export function Chat() {
           },
           { temperature: resolved.temperature, numCtx: resolved.numCtx, provider }
         );
+        // If the model skipped tools on an explicit web ask (and pre-search somehow empty), force a search hop.
+        if (mustSearch && !TOOL_RE.test(full) && lastSearchHitsRef.current.length === 0) {
+          full = `<tool name="web_search">${JSON.stringify({ query: messageText })}</tool>`;
+          updateStreaming(`${t("chat.toolSearch")}\n`);
+        }
         if (TOOL_RE.test(full)) {
-          const out = await runToolLoop(full, historyForTools, chatId, chatModel);
+          const out = await runToolLoop(full, historyForTools, chatId, chatModel, provider);
           finalText = out.text;
           assistantImages = out.images;
         } else {
@@ -698,13 +1056,66 @@ export function Chat() {
         }
       } catch (e) {
         if (e instanceof StreamCancelledError) {
-          finalText = e.partial.trim();
+          finalText = stripToolTags(e.partial).trim();
           if (!finalText) {
             setMessages((prev) => prev.filter((m) => !m.streaming));
             return;
           }
         } else {
           throw e;
+        }
+      }
+
+      // User hit Stop — do not persist empty-market fallback or a completed reply.
+      if (stopRequestedRef.current) {
+        finalText = stripToolTags(finalText).trim();
+        if (finalText) {
+          const saved = await api.addChatMessage(
+            chatId,
+            "assistant",
+            finalText,
+            undefined,
+            assistantImages.length ? assistantImages : undefined
+          );
+          setMessages((prev) => {
+            const withoutStream = prev.filter((m) => !m.streaming);
+            return [
+              ...withoutStream,
+              {
+                id: saved.id,
+                role: "assistant",
+                content: finalText,
+                images: assistantImages.length ? assistantImages : undefined,
+              },
+            ];
+          });
+          await refreshChats();
+        } else {
+          setMessages((prev) => prev.filter((m) => !m.streaming));
+        }
+        return;
+      }
+
+      // Hard guard: never leave empty-market / failed-search narrative without portal links.
+      if (mustSearch) {
+        const seedFrom = lastUserJobQueryRef.current || messageText;
+        lastSearchHitsRef.current = preferPortalHits(
+          mergeJobPortalSeeds(lastSearchHitsRef.current, seedFrom)
+        );
+        if (lastSearchHitsRef.current.length > 0) {
+          const links = formatHitsBlock(lastSearchHitsRef.current.slice(0, 12));
+          const emptyish = !finalText.trim() || looksLikeEmptyMarketAnswer(finalText);
+          const failedNarrative = looksLikeFailedSearchNarrative(finalText);
+          const usefulPortals = hasUsefulPortalLinks(finalText);
+          if (emptyish || failedNarrative || !usefulPortals) {
+            finalText = [
+              t("chat.emptyMarketFallback"),
+              "",
+              links,
+              "",
+              t("chat.emptyMarketHint"),
+            ].join("\n");
+          }
         }
       }
 
@@ -736,7 +1147,7 @@ export function Chat() {
       }
       if (!userPersisted) {
         setInput(text);
-        setPendingImages(attachments);
+        setPendingAttachments(attachments);
       }
     } finally {
       sendingRef.current = false;
@@ -875,6 +1286,11 @@ export function Chat() {
                   } catch {
                     /* ignore */
                   }
+                  if (aiProvider === "gemini") {
+                    const m = geminiModelForChatMode(v);
+                    setModel(m);
+                    setTextModel(m);
+                  }
                 }}
                 title={t(`chat.modeHint.${chatMode}`)}
               >
@@ -882,6 +1298,7 @@ export function Chat() {
                 <option value="instant">{t("chat.mode.instant")}</option>
                 <option value="eficaz">{t("chat.mode.eficaz")}</option>
                 <option value="pro">{t("chat.mode.pro")}</option>
+                <option value="max">{t("chat.mode.max")}</option>
               </select>
             </label>
           </div>
@@ -1010,20 +1427,30 @@ export function Chat() {
 
         {error && <p className="chat-error">{error}</p>}
 
-        {pendingImages.length > 0 && (
+        {pendingAttachments.length > 0 && (
           <div className="chat-pending-images">
             <span className="chat-pending-label">
-              {t("chat.pendingImages", { count: pendingImages.length })}
+              {t("chat.pendingFiles", { count: pendingAttachments.length })}
             </span>
-            {pendingImages.map((img, i) => (
-              <div key={`${img.name}-${i}`} className="chat-pending-thumb">
-                <img src={img.preview} alt={img.name} />
+            {pendingAttachments.map((att, i) => (
+              <div
+                key={`${att.name}-${i}`}
+                className={
+                  att.kind === "image" ? "chat-pending-thumb" : "chat-pending-file"
+                }
+                title={att.name}
+              >
+                {att.kind === "image" ? (
+                  <img src={att.preview} alt={att.name} />
+                ) : (
+                  <span className="chat-pending-file-name">{att.name}</span>
+                )}
                 <button
                   type="button"
                   className="chat-pending-remove"
                   title={t("chat.removeAttachment")}
                   onClick={() =>
-                    setPendingImages((prev) => prev.filter((_, idx) => idx !== i))
+                    setPendingAttachments((prev) => prev.filter((_, idx) => idx !== i))
                   }
                 >
                   ×
@@ -1043,7 +1470,7 @@ export function Chat() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,.txt,.md,.csv,.json,.xml,.html,.htm,.log,.yaml,.yml,.tsv,.py,.ts,.tsx,.js,.jsx,.rs,.toml,text/*,application/json"
             multiple
             hidden
             onChange={(e) => {
@@ -1055,7 +1482,7 @@ export function Chat() {
             type="button"
             className="btn btn-outline chat-attach"
             title={t("chat.attach")}
-            disabled={sending || pendingImages.length >= 4}
+            disabled={sending || pendingAttachments.length >= CHAT_MAX_ATTACHMENTS}
             onClick={() => fileInputRef.current?.click()}
           >
             {t("chat.attach")}
@@ -1070,8 +1497,10 @@ export function Chat() {
             onPaste={(e) => {
               const files = e.clipboardData?.files;
               if (files?.length) {
-                const hasImage = Array.from(files).some((f) => f.type.startsWith("image/"));
-                if (hasImage) {
+                const hasAttachable = Array.from(files).some(
+                  (f) => f.type.startsWith("image/") || isChatTextFile(f)
+                );
+                if (hasAttachable) {
                   e.preventDefault();
                   void addPendingFiles(files);
                 }
@@ -1093,7 +1522,7 @@ export function Chat() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={!input.trim() && pendingImages.length === 0}
+              disabled={!input.trim() && pendingAttachments.length === 0}
             >
               {t("chat.send")}
             </button>

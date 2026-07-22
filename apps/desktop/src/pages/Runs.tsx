@@ -66,7 +66,8 @@ export function Runs() {
   };
 
   const handleDelete = async (run: RunExecution) => {
-    if (run.cancellable || ACTIVE_STATUSES.has(run.status)) {
+    const active = run.cancellable || ACTIVE_STATUSES.has(run.status);
+    if (active && run.status !== "cancelled") {
       window.alert(t("runs.deleteRunning"));
       return;
     }
@@ -140,8 +141,10 @@ export function Runs() {
             </thead>
             <tbody>
               {runs.map((run) => {
-                const canCancel = run.cancellable === true;
-                const canDelete = !canCancel && !ACTIVE_STATUSES.has(run.status);
+                const canCancel = run.cancellable === true && run.status !== "cancelled";
+                const canDelete =
+                  run.status === "cancelled" ||
+                  (!canCancel && !ACTIVE_STATUSES.has(run.status));
                 return (
                   <tr key={run.runId} className={`run-row run-status-${run.status}`}>
                     <td>{run.agentName}</td>

@@ -32,6 +32,7 @@ pub struct AppState {
     pub(crate) cancelled_chat_streams: Arc<Mutex<HashSet<String>>>,
 }
 
+#[derive(Clone)]
 struct QueuedRun {
     agent_id: String,
     effort: String,
@@ -46,6 +47,8 @@ pub(crate) struct RunQueue {
     active_started_at: Option<String>,
     pending: VecDeque<QueuedRun>,
     cancelled_run_ids: HashSet<String>,
+    /// Runs deleted while the worker may still be shutting down — never re-persist.
+    deleted_run_ids: HashSet<String>,
 }
 
 impl Default for RunQueue {
@@ -58,6 +61,7 @@ impl Default for RunQueue {
             active_started_at: None,
             pending: VecDeque::new(),
             cancelled_run_ids: HashSet::new(),
+            deleted_run_ids: HashSet::new(),
         }
     }
 }
@@ -771,9 +775,32 @@ fn delete_agent(state: State<AppState>, id: String) -> Result<(), String> {
             .run_queue
             .lock()
             .map_err(|_| "Run queue lock failed")?;
+        // Drop queued runs for this agent.
+        let removed_pending: Vec<_> = queue
+            .pending
+            .iter()
+            .filter(|r| r.agent_id == id)
+            .cloned()
+            .collect();
         queue.pending.retain(|r| r.agent_id != id);
+        for pending in &removed_pending {
+            queue.cancelled_run_ids.insert(pending.run_id.clone());
+            queue.deleted_run_ids.insert(pending.run_id.clone());
+        }
+
         if queue.active_agent_id.as_deref() == Some(id.as_str()) {
+            if let Some(run_id) = queue.active_run_id.clone() {
+                queue.cancelled_run_ids.insert(run_id.clone());
+                queue.deleted_run_ids.insert(run_id);
+            }
+            if let Some(pid) = queue.active_pid {
+                kill_process_tree(pid);
+            }
             queue.active_agent_id = None;
+            queue.active_run_id = None;
+            queue.active_effort = None;
+            queue.active_pid = None;
+            queue.active_started_at = None;
         }
     }
 
@@ -1449,6 +1476,12 @@ fn cancel_pending_run(
     run_id: &str,
 ) {
     write_progress_cancelled(data_dir, &removed.agent_id, run_id);
+    let started_at = db
+        .get_run_log(run_id)
+        .ok()
+        .flatten()
+        .map(|l| l.started_at)
+        .unwrap_or_else(chrono::Utc::now);
     let _ = db.save_run_log(&RunLog {
         id: run_id.to_string(),
         agent_id: removed.agent_id.clone(),
@@ -1457,7 +1490,7 @@ fn cancel_pending_run(
         status: "cancelled".to_string(),
         summary: "Cancelled by user".to_string(),
         results_count: 0,
-        started_at: chrono::Utc::now(),
+        started_at,
         finished_at: Some(chrono::Utc::now()),
     });
     emit_run_cancelled(app, &removed.agent_id, run_id);
@@ -1470,6 +1503,14 @@ fn handle_cancelled_run(
     effort: &str,
     run_id: &str,
 ) {
+    let existing = db.get_run_log(run_id).ok().flatten();
+    let already_cancelled = existing
+        .as_ref()
+        .map(|l| l.status == "cancelled")
+        .unwrap_or(false);
+    let started_at = existing
+        .map(|l| l.started_at)
+        .unwrap_or_else(chrono::Utc::now);
     let _ = db.save_run_log(&RunLog {
         id: run_id.to_string(),
         agent_id: agent_id.to_string(),
@@ -1478,10 +1519,136 @@ fn handle_cancelled_run(
         status: "cancelled".to_string(),
         summary: "Cancelled by user".to_string(),
         results_count: 0,
-        started_at: chrono::Utc::now(),
+        started_at,
         finished_at: Some(chrono::Utc::now()),
     });
-    emit_run_cancelled(app, agent_id, run_id);
+    // Avoid double UI events when cancel_run already emitted.
+    if !already_cancelled {
+        emit_run_cancelled(app, agent_id, run_id);
+    }
+}
+
+/// Persist cancelled status immediately so the UI can delete without waiting for the worker.
+fn persist_run_cancelled(
+    db: &Arc<Database>,
+    agent_id: &str,
+    effort: &str,
+    run_id: &str,
+) {
+    let started_at = db
+        .get_run_log(run_id)
+        .ok()
+        .flatten()
+        .map(|l| l.started_at)
+        .unwrap_or_else(chrono::Utc::now);
+    let _ = db.save_run_log(&RunLog {
+        id: run_id.to_string(),
+        agent_id: agent_id.to_string(),
+        effort: parse_effort_level(effort),
+        phase: "cancelled".to_string(),
+        status: "cancelled".to_string(),
+        summary: "Cancelled by user".to_string(),
+        results_count: 0,
+        started_at,
+        finished_at: Some(chrono::Utc::now()),
+    });
+}
+
+/// Kill a just-spawned child and clear active_* / cancel flags. Returns whether the run was deleted.
+fn abort_spawned_child(
+    run_queue: &Arc<Mutex<RunQueue>>,
+    pid: u32,
+    child: std::process::Child,
+    run_id: &str,
+) -> bool {
+    kill_process_tree(pid);
+    let _ = child.wait_with_output();
+    run_queue
+        .lock()
+        .ok()
+        .map(|mut q| {
+            q.active_pid = None;
+            q.active_run_id = None;
+            q.active_effort = None;
+            q.active_started_at = None;
+            let deleted = q.deleted_run_ids.remove(run_id);
+            let _ = q.cancelled_run_ids.remove(run_id);
+            deleted
+        })
+        .unwrap_or(false)
+}
+
+fn run_is_abort_requested(run_queue: &Arc<Mutex<RunQueue>>, run_id: &str) -> (bool, bool) {
+    run_queue
+        .lock()
+        .ok()
+        .map(|q| {
+            let deleted = q.deleted_run_ids.contains(run_id);
+            let cancelled = q.cancelled_run_ids.contains(run_id);
+            (cancelled || deleted, deleted)
+        })
+        .unwrap_or((false, false))
+}
+
+/// Persist `running` only if the run was not cancelled/deleted. Returns false if aborted.
+fn try_persist_run_running(
+    db: &Arc<Database>,
+    run_queue: &Arc<Mutex<RunQueue>>,
+    run_id: &str,
+    agent_id: &str,
+    effort: &str,
+) -> bool {
+    let (abort, _) = run_is_abort_requested(run_queue, run_id);
+    if abort {
+        return false;
+    }
+
+    match db.get_run_log(run_id) {
+        Ok(None) => {
+            // Row gone — only OK if never created yet; if tombstoned as deleted, abort.
+            if run_queue
+                .lock()
+                .ok()
+                .map(|q| q.deleted_run_ids.contains(run_id))
+                .unwrap_or(false)
+            {
+                return false;
+            }
+        }
+        Ok(Some(log)) if log.status == "cancelled" || log.finished_at.is_some() => return false,
+        _ => {}
+    }
+
+    let started_at = db
+        .get_run_log(run_id)
+        .ok()
+        .flatten()
+        .map(|l| l.started_at)
+        .unwrap_or_else(chrono::Utc::now);
+
+    let _ = db.save_run_log(&RunLog {
+        id: run_id.to_string(),
+        agent_id: agent_id.to_string(),
+        effort: parse_effort_level(effort),
+        phase: "running".to_string(),
+        status: "running".to_string(),
+        summary: String::new(),
+        results_count: 0,
+        started_at,
+        finished_at: None,
+    });
+
+    // Cancel/delete may have landed during the DB write — revert immediately.
+    let (abort, deleted) = run_is_abort_requested(run_queue, run_id);
+    if abort {
+        if deleted {
+            let _ = db.delete_run(run_id);
+        } else {
+            persist_run_cancelled(db, agent_id, effort, run_id);
+        }
+        return false;
+    }
+    true
 }
 
 fn spawn_agent_run_worker(
@@ -1511,6 +1678,22 @@ fn spawn_agent_run_worker(
         let llm_env = match llm_env_for_runner(&db) {
             Ok(env) => env,
             Err(err) => {
+                let (abort, deleted) = run_is_abort_requested(&run_queue, &run_id);
+                if deleted {
+                    finish();
+                    return;
+                }
+                if abort {
+                    handle_cancelled_run(&app, &db, &agent_id, &effort, &run_id);
+                    finish();
+                    return;
+                }
+                let started_at = db
+                    .get_run_log(&run_id)
+                    .ok()
+                    .flatten()
+                    .map(|l| l.started_at)
+                    .unwrap_or_else(chrono::Utc::now);
                 let _ = db.save_run_log(&RunLog {
                     id: run_id.clone(),
                     agent_id: agent_id.clone(),
@@ -1519,7 +1702,7 @@ fn spawn_agent_run_worker(
                     status: "failed".to_string(),
                     summary: err.clone(),
                     results_count: 0,
-                    started_at: chrono::Utc::now(),
+                    started_at,
                     finished_at: Some(chrono::Utc::now()),
                 });
                 let _ = app.emit(
@@ -1549,25 +1732,39 @@ fn spawn_agent_run_worker(
         ) {
             Ok(child) => {
                 let pid = child.id();
-                {
+                let pre_cancelled = {
+                    let mut cancelled = false;
                     if let Ok(mut queue) = run_queue.lock() {
-                        queue.active_pid = Some(pid);
-                        queue.active_run_id = Some(run_id.clone());
-                        queue.active_effort = Some(effort.clone());
-                        queue.active_started_at = Some(chrono::Utc::now().to_rfc3339());
+                        cancelled = queue.cancelled_run_ids.contains(&run_id)
+                            || queue.deleted_run_ids.contains(&run_id);
+                        if !cancelled {
+                            queue.active_pid = Some(pid);
+                            queue.active_run_id = Some(run_id.clone());
+                            queue.active_effort = Some(effort.clone());
+                            queue.active_started_at = Some(chrono::Utc::now().to_rfc3339());
+                        }
                     }
+                    cancelled
+                };
+
+                if pre_cancelled {
+                    let deleted = abort_spawned_child(&run_queue, pid, child, &run_id);
+                    if !deleted {
+                        handle_cancelled_run(&app, &db, &agent_id, &effort, &run_id);
+                    }
+                    finish();
+                    return;
                 }
-                let _ = db.save_run_log(&RunLog {
-                    id: run_id.clone(),
-                    agent_id: agent_id.clone(),
-                    effort: parse_effort_level(&effort),
-                    phase: "running".to_string(),
-                    status: "running".to_string(),
-                    summary: String::new(),
-                    results_count: 0,
-                    started_at: chrono::Utc::now(),
-                    finished_at: None,
-                });
+
+                if !try_persist_run_running(&db, &run_queue, &run_id, &agent_id, &effort) {
+                    let deleted = abort_spawned_child(&run_queue, pid, child, &run_id);
+                    if !deleted {
+                        handle_cancelled_run(&app, &db, &agent_id, &effort, &run_id);
+                    }
+                    finish();
+                    return;
+                }
+
                 let _ = app.emit(
                     "agent-run-started",
                     serde_json::json!({
@@ -1578,7 +1775,9 @@ fn spawn_agent_run_worker(
 
                 let was_cancelled = run_queue
                     .lock()
-                    .map(|q| q.cancelled_run_ids.contains(&run_id))
+                    .map(|q| {
+                        q.cancelled_run_ids.contains(&run_id) || q.deleted_run_ids.contains(&run_id)
+                    })
                     .unwrap_or(false);
 
                 let output = if was_cancelled {
@@ -1595,19 +1794,27 @@ fn spawn_agent_run_worker(
                     queue.active_started_at = None;
                 }
 
-                let cancelled = run_queue
+                let (cancelled, deleted) = run_queue
                     .lock()
                     .ok()
-                    .map(|mut q| q.cancelled_run_ids.remove(&run_id))
-                    .unwrap_or(false);
+                    .map(|mut q| {
+                        let deleted = q.deleted_run_ids.remove(&run_id);
+                        let cancelled = q.cancelled_run_ids.remove(&run_id);
+                        (cancelled || deleted, deleted)
+                    })
+                    .unwrap_or((false, false));
 
                 match output {
                     Ok(out) => {
                         let stdout = String::from_utf8_lossy(&out.stdout);
                         let stderr = String::from_utf8_lossy(&out.stderr);
-                        let _ = std::fs::create_dir_all(data_dir.join("runs"));
-                        append_run_process_log(&data_dir, &run_id, &stdout, &stderr);
-                        if cancelled {
+                        if !deleted {
+                            let _ = std::fs::create_dir_all(data_dir.join("runs"));
+                            append_run_process_log(&data_dir, &run_id, &stdout, &stderr);
+                        }
+                        if deleted {
+                            // User already deleted the run row — do not resurrect it.
+                        } else if cancelled {
                             handle_cancelled_run(&app, &db, &agent_id, &effort, &run_id);
                         } else {
                             finalize_agent_run(
@@ -1624,7 +1831,9 @@ fn spawn_agent_run_worker(
                         }
                     }
                     Err(e) => {
-                        if cancelled {
+                        if deleted {
+                            // ignore
+                        } else if cancelled {
                             handle_cancelled_run(&app, &db, &agent_id, &effort, &run_id);
                         } else {
                             let _ = db.set_agent_error(&agent_id, &e.to_string());
@@ -1902,6 +2111,13 @@ fn finalize_agent_run(
     stderr: &str,
     exit_ok: bool,
 ) {
+    // Never resurrect a deleted/cancelled run.
+    match db.get_run_log(run_id) {
+        Ok(None) => return,
+        Ok(Some(log)) if log.status == "cancelled" => return,
+        _ => {}
+    }
+
     let parsed = parse_runner_stdout(stdout);
     let run_file = read_run_file(data_dir, run_id);
     let file_results = best_run_results(data_dir, agent_id, run_id);
@@ -1943,6 +2159,12 @@ fn finalize_agent_run(
                 .map(|r| r.spec.schedule.interval_minutes)
                 .unwrap_or(1440),
         );
+        let started_at = db
+            .get_run_log(run_id)
+            .ok()
+            .flatten()
+            .map(|l| l.started_at)
+            .unwrap_or_else(chrono::Utc::now);
         let _ = db.save_run_log(&RunLog {
             id: run_id.to_string(),
             agent_id: agent_id.to_string(),
@@ -1955,7 +2177,7 @@ fn finalize_agent_run(
                 summary.clone()
             },
             results_count: effective_count as i32,
-            started_at: chrono::Utc::now(),
+            started_at,
             finished_at: Some(chrono::Utc::now()),
         });
         let notify = db
@@ -2291,14 +2513,28 @@ fn list_runs(
                     phase = snapshot.phase;
                 } else if log.finished_at.is_some() {
                     // Keep persisted terminal status from DB.
-                } else if log.status == "queued" {
+                } else {
+                    // Orphan: DB says running/queued but process is not in the live queue.
                     status = "cancelled".to_string();
                     phase = "cancelled".to_string();
+                    if message.is_empty() {
+                        message = "Stale execution (process no longer running)".to_string();
+                    }
                 }
             }
 
-            let cancellable = queue.active_run_id.as_deref() == Some(log.id.as_str())
-                || queue.pending.iter().any(|pending| pending.run_id == log.id);
+            // Cancelled (or cancel requested) must not stay "cancellable" — allows delete right away.
+            let cancel_requested = queue.cancelled_run_ids.contains(&log.id);
+            if cancel_requested || status == "cancelled" || phase == "cancelled" {
+                status = "cancelled".to_string();
+                phase = "cancelled".to_string();
+            }
+
+            let cancellable = !cancel_requested
+                && status != "cancelled"
+                && phase != "cancelled"
+                && (queue.active_run_id.as_deref() == Some(log.id.as_str())
+                    || queue.pending.iter().any(|pending| pending.run_id == log.id));
 
             RunExecutionDto {
                 run_id: log.id,
@@ -2327,7 +2563,7 @@ fn list_runs(
 
 #[tauri::command]
 fn cancel_run(app: AppHandle, state: State<AppState>, run_id: String) -> Result<(), String> {
-    let (active, agent_id, pid) = {
+    let (active, agent_id, effort, pid) = {
         let mut queue = state
             .run_queue
             .lock()
@@ -2335,8 +2571,12 @@ fn cancel_run(app: AppHandle, state: State<AppState>, run_id: String) -> Result<
         if queue.active_run_id.as_deref() == Some(run_id.as_str()) {
             queue.cancelled_run_ids.insert(run_id.clone());
             let agent_id = queue.active_agent_id.clone().unwrap_or_default();
+            let effort = queue
+                .active_effort
+                .clone()
+                .unwrap_or_else(|| "medium".to_string());
             let pid = queue.active_pid;
-            (true, agent_id, pid)
+            (true, agent_id, effort, pid)
         } else {
             let idx = queue.pending.iter().position(|r| r.run_id == run_id);
             if let Some(i) = idx {
@@ -2354,19 +2594,33 @@ fn cancel_run(app: AppHandle, state: State<AppState>, run_id: String) -> Result<
                 if is_terminal_progress_phase(&snapshot.phase) {
                     return Ok(());
                 }
-                if queue.active_agent_id.as_deref() == Some(log.agent_id.as_str())
-                    && queue.active_pid.is_some()
-                {
+                // Never kill another run's PID. Orphan "running" logs: just mark cancelled.
+                if queue.active_run_id.as_deref() == Some(run_id.as_str()) {
                     queue.cancelled_run_ids.insert(run_id.clone());
-                    queue.active_run_id = Some(run_id.clone());
                     let pid = queue.active_pid;
+                    let effort = queue
+                        .active_effort
+                        .clone()
+                        .unwrap_or_else(|| effort_to_string(&log.effort));
                     drop(queue);
                     write_progress_cancelled(&state.data_dir, &log.agent_id, &run_id);
+                    persist_run_cancelled(&state.db, &log.agent_id, &effort, &run_id);
+                    emit_run_cancelled(&app, &log.agent_id, &run_id);
                     if let Some(pid) = pid {
                         kill_process_tree(pid);
                     }
                     return Ok(());
                 }
+                drop(queue);
+                write_progress_cancelled(&state.data_dir, &log.agent_id, &run_id);
+                persist_run_cancelled(
+                    &state.db,
+                    &log.agent_id,
+                    &effort_to_string(&log.effort),
+                    &run_id,
+                );
+                emit_run_cancelled(&app, &log.agent_id, &run_id);
+                return Ok(());
             }
 
             return Err("Run not found or already finished".to_string());
@@ -2375,6 +2629,8 @@ fn cancel_run(app: AppHandle, state: State<AppState>, run_id: String) -> Result<
 
     if active {
         write_progress_cancelled(&state.data_dir, &agent_id, &run_id);
+        persist_run_cancelled(&state.db, &agent_id, &effort, &run_id);
+        emit_run_cancelled(&app, &agent_id, &run_id);
         if let Some(pid) = pid {
             kill_process_tree(pid);
         }
@@ -2466,15 +2722,40 @@ fn get_run_log(
 #[tauri::command]
 fn delete_run(state: State<AppState>, run_id: String) -> Result<(), String> {
     {
-        let queue = state
+        let mut queue = state
             .run_queue
             .lock()
             .map_err(|_| "Run queue lock failed".to_string())?;
-        if queue.active_run_id.as_deref() == Some(run_id.as_str()) {
-            return Err("Cannot delete a running execution".to_string());
+        let cancel_requested = queue.cancelled_run_ids.contains(&run_id);
+        let is_active = queue.active_run_id.as_deref() == Some(run_id.as_str());
+        let is_pending = queue.pending.iter().any(|r| r.run_id == run_id);
+
+        // Allow deleting cancelled runs even if the worker has not cleared active yet.
+        if (is_active || is_pending) && !cancel_requested {
+            let db_cancelled = state
+                .db
+                .get_run_log(&run_id)
+                .ok()
+                .flatten()
+                .map(|l| l.status == "cancelled" || l.finished_at.is_some())
+                .unwrap_or(false);
+            if !db_cancelled {
+                return Err("Cannot delete a running execution — cancel it first".to_string());
+            }
         }
-        if queue.pending.iter().any(|r| r.run_id == run_id) {
-            return Err("Cannot delete a queued execution".to_string());
+
+        queue.pending.retain(|r| r.run_id != run_id);
+        // Keep cancelled_run_ids so the worker still treats the run as cancelled.
+        // Only tombstone when a worker may still finish — avoids leaking deleted_run_ids.
+        if is_active || cancel_requested || is_pending {
+            queue.deleted_run_ids.insert(run_id.clone());
+            if !cancel_requested {
+                queue.cancelled_run_ids.insert(run_id.clone());
+            }
+        }
+        if queue.active_run_id.as_deref() == Some(run_id.as_str()) {
+            // Keep active_pid so the worker can wait/kill; clear run id for list_runs.
+            queue.active_run_id = None;
         }
     }
 

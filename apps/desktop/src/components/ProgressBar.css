@@ -38,6 +38,11 @@
   font-size: 0.75rem;
 }
 
+.progress-cancel {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+}
+
 .progress-fill-done {
   background: linear-gradient(90deg, #22c55e, #4ade80);
 }

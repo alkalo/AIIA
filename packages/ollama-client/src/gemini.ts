@@ -31,13 +31,25 @@ export function geminiModelsForEffort(effort: string): {
   extractorModel: string;
   criticModel?: string;
 } {
-  const heavy = effort === "high" || effort === "super_high" || effort === "ultra_high";
+  const heavy =
+    effort === "high" ||
+    effort === "super_high" ||
+    effort === "ultra_high" ||
+    effort === "pro" ||
+    effort === "max";
   const model = heavy ? GEMINI_PRO : GEMINI_FLASH;
   return {
     plannerModel: model,
     extractorModel: GEMINI_FLASH,
     criticModel: heavy ? GEMINI_PRO : undefined,
   };
+}
+
+/** Per-call timeout: Gemini Pro needs longer; Flash/Ollama default 180s. */
+export function defaultLlmTimeoutMs(model: string): number {
+  const m = model.toLowerCase();
+  if (m.includes("gemini") && m.includes("pro")) return 300_000;
+  return 180_000;
 }
 
 function buildGeminiBody(
@@ -118,10 +130,10 @@ export class GeminiClient implements LlmClient {
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<string> {
-    const timeoutMs = options.timeoutMs ?? 120_000;
+    const model = options.model.startsWith("gemini") ? options.model : GEMINI_FLASH;
+    const timeoutMs = options.timeoutMs ?? defaultLlmTimeoutMs(model);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const model = options.model.startsWith("gemini") ? options.model : GEMINI_FLASH;
     const body = buildGeminiBody(messages, options.temperature, options.format === "json");
     const url = `${this.baseUrl}/models/${model}:generateContent`;
 

@@ -9,6 +9,9 @@ interface Props {
   thinkingStep?: string;
   budgetUsedSec?: number;
   onDismiss?: () => void;
+  /** Cancel the in-flight agent run (requires runId on the caller). */
+  onCancel?: () => void;
+  cancelling?: boolean;
 }
 
 export function ProgressBar({
@@ -19,10 +22,13 @@ export function ProgressBar({
   thinkingStep,
   budgetUsedSec,
   onDismiss,
+  onCancel,
+  cancelling,
 }: Props) {
   const { t } = useTranslation();
   const phaseLabel = t(`progress.${phase}`, phase);
-  const finished = phase === "done" || phase === "error";
+  const finished = phase === "done" || phase === "error" || phase === "cancelled";
+  const canCancel = Boolean(onCancel) && !finished;
 
   return (
     <div className="progress-container">
@@ -37,6 +43,16 @@ export function ProgressBar({
           {Math.round(percent)}%
           {budgetUsedSec != null && budgetUsedSec > 0 && ` · ${budgetUsedSec}s`}
           {estimatedSec != null && estimatedSec > 0 && ` · ~${Math.ceil(estimatedSec)}s`}
+          {canCancel && (
+            <button
+              type="button"
+              className="btn btn-sm btn-danger progress-cancel"
+              disabled={cancelling}
+              onClick={onCancel}
+            >
+              {cancelling ? t("common.loading") : t("progress.cancel")}
+            </button>
+          )}
           {finished && onDismiss && (
             <button type="button" className="btn btn-sm btn-outline progress-dismiss" onClick={onDismiss}>
               {t("progress.dismiss")}

@@ -30,9 +30,13 @@ export class PlannerAgent {
       this.plannerModel = geminiModelsForEffort("medium").plannerModel;
       return;
     }
+    const models = await this.ollama.listModels().catch(() => [] as string[]);
+    if (models.some((m) => m.startsWith("gemini"))) {
+      this.plannerModel = geminiModelsForEffort("medium").plannerModel;
+      return;
+    }
     const hw = await detectHardware();
     this.plannerModel = hw.plannerModel;
-    const models = await this.ollama.listModels().catch(() => [] as string[]);
     if (!modelIsAvailable(models, this.plannerModel)) {
       await this.ollama.pullModel(this.plannerModel);
     }
@@ -56,7 +60,7 @@ export class PlannerAgent {
     const parsed = coerceJsonObject<Partial<AgentSpec>>(response);
     if (!parsed) {
       throw new Error(
-        "El planificador no devolvió un JSON válido. Revisa que Ollama esté activo y el modelo descargado, e inténtalo de nuevo."
+        "El planificador no devolvió un JSON válido. Revisa el proveedor de IA (Ollama local o Gemini) e inténtalo de nuevo."
       );
     }
 

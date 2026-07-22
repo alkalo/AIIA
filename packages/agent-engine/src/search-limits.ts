@@ -1,4 +1,4 @@
-import { EFFORT_CONFIGS, type EffortLevel } from "@aiia/ollama-client";
+import { EFFORT_CONFIGS, type EffortLevel } from "@aiia/ollama-client/browser";
 import type { AgentSpec } from "./types.js";
 
 export interface SearchLimits {

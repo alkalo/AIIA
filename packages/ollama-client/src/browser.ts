@@ -4,6 +4,7 @@ export type EffortLevel = "low" | "medium" | "high" | "super_high" | "ultra_high
 
 import {
   RESEARCH_PROFILES,
+  getEffortEstimateFromProfile,
 } from "./research-profile.js";
 
 export const EFFORT_LEVELS: EffortLevel[] = [
@@ -30,63 +31,63 @@ export interface EffortConfig {
 export const EFFORT_CONFIGS: Record<EffortLevel, EffortConfig> = {
   low: {
     steps: 1,
-    maxSources: 8,
-    maxResultsPerQuery: 8,
-    queryExpansion: 1,
+    maxSources: 6,
+    maxResultsPerQuery: 6,
+    queryExpansion: 0,
     refinePasses: 0,
-    temperature: 0.3,
+    temperature: 0.35,
     numCtx: 2048,
-    extractContentChars: 4000,
-    filterBatchSize: 15,
-    estimatedMinutes: [1, 2],
+    extractContentChars: 3000,
+    filterBatchSize: 12,
+    estimatedMinutes: [0, 2],
   },
   medium: {
     steps: 2,
-    maxSources: 18,
-    maxResultsPerQuery: 8,
-    queryExpansion: 2,
+    maxSources: 28,
+    maxResultsPerQuery: 10,
+    queryExpansion: 3,
     refinePasses: 0,
-    temperature: 0.45,
+    temperature: 0.4,
     numCtx: 4096,
-    extractContentChars: 6000,
+    extractContentChars: 7000,
     filterBatchSize: 25,
-    estimatedMinutes: [3, 8],
+    estimatedMinutes: [5, 20],
   },
   high: {
-    steps: 3,
-    maxSources: 80,
+    steps: 4,
+    maxSources: 90,
     maxResultsPerQuery: 15,
-    queryExpansion: 6,
+    queryExpansion: 7,
     refinePasses: 1,
-    temperature: 0.35,
-    numCtx: 8192,
-    extractContentChars: 10000,
-    filterBatchSize: 35,
-    estimatedMinutes: [30, 60],
-  },
-  super_high: {
-    steps: 5,
-    maxSources: 160,
-    maxResultsPerQuery: 18,
-    queryExpansion: 10,
-    refinePasses: 2,
     temperature: 0.3,
     numCtx: 8192,
-    extractContentChars: 14000,
-    filterBatchSize: 50,
-    estimatedMinutes: [60, 120],
+    extractContentChars: 12000,
+    filterBatchSize: 40,
+    estimatedMinutes: [30, 75],
+  },
+  super_high: {
+    steps: 6,
+    maxSources: 180,
+    maxResultsPerQuery: 18,
+    queryExpansion: 12,
+    refinePasses: 2,
+    temperature: 0.28,
+    numCtx: 8192,
+    extractContentChars: 16000,
+    filterBatchSize: 55,
+    estimatedMinutes: [75, 120],
   },
   ultra_high: {
-    steps: 7,
-    maxSources: 280,
-    maxResultsPerQuery: 20,
-    queryExpansion: 14,
-    refinePasses: 3,
-    temperature: 0.25,
+    steps: 10,
+    maxSources: 360,
+    maxResultsPerQuery: 25,
+    queryExpansion: 18,
+    refinePasses: 4,
+    temperature: 0.2,
     numCtx: 12288,
-    extractContentChars: 20000,
-    filterBatchSize: 60,
-    estimatedMinutes: [120, 240],
+    extractContentChars: 24000,
+    filterBatchSize: 70,
+    estimatedMinutes: [120, 180],
   },
 };
 
@@ -199,15 +200,7 @@ export class OllamaClient implements LlmClient {
 }
 
 export function getEffortEstimate(effort: EffortLevel | string | undefined): string {
-  const profile = RESEARCH_PROFILES[effort as EffortLevel];
-  if (!profile) return "—";
-  const [lo, hi] = profile.estimatedMinutes;
-  if (hi >= 60) {
-    const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, ""));
-    return `${fmt(lo / 60)}–${fmt(hi / 60)} h`;
-  }
-  const fmtMin = (n: number) => (n < 1 ? "<1" : String(Math.round(n)));
-  return `${fmtMin(lo)}–${fmtMin(hi)} min`;
+  return getEffortEstimateFromProfile(effort);
 }
 
 export {
@@ -231,6 +224,7 @@ export {
   GeminiClient,
   createLlmClient,
   geminiModelsForEffort,
+  defaultLlmTimeoutMs,
   GEMINI_FLASH,
   GEMINI_PRO,
 } from "./gemini.js";

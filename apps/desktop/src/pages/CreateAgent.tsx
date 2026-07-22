@@ -20,6 +20,7 @@ import { ProgressBar } from "../components/ProgressBar";
 import { AgentSpecEditor } from "../components/AgentSpecEditor";
 import { useRunProgress } from "../hooks/useAgents";
 import { useAgentGeneration } from "../contexts/AgentGenerationContext";
+import { AiProviderSelect } from "../components/AiProviderSelect";
 
 const PREVIEW_AGENT_KEY = "aiia-create-preview-agent-id";
 const TERMINAL_PHASES = new Set(["done", "error", "cancelled"]);
@@ -56,6 +57,7 @@ export function CreateAgent() {
   const [runningId, setRunningId] = useState<string | null>(null);
 
   const { progress, isFinished } = useRunProgress(runningId, Boolean(runningId));
+  const [cancellingRun, setCancellingRun] = useState(false);
 
   const displayError = error || generationError;
 
@@ -66,6 +68,21 @@ export function CreateAgent() {
     previewAgentIdRef.current = null;
     sessionStorage.removeItem(PREVIEW_AGENT_KEY);
   }, []);
+
+  const handleCancelRun = useCallback(async () => {
+    const runId = progress?.runId;
+    if (!runId) return;
+    if (!window.confirm(t("runs.cancelConfirm"))) return;
+    setCancellingRun(true);
+    try {
+      await api.cancelRun(runId);
+      setPreviewRunning(false);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCancellingRun(false);
+    }
+  }, [progress?.runId, t]);
 
   useEffect(() => {
     if (!generatedSpec) return;
@@ -133,6 +150,11 @@ export function CreateAgent() {
       sessionStorage.removeItem(PREVIEW_AGENT_KEY);
     }).then((fn) => unsubs.push(fn));
 
+    listen("agent-run-cancelled", () => {
+      setPreviewRunning(false);
+      sessionStorage.removeItem(PREVIEW_AGENT_KEY);
+    }).then((fn) => unsubs.push(fn));
+
     return () => {
       unsubs.forEach((fn) => fn());
     };
@@ -157,11 +179,10 @@ export function CreateAgent() {
 
   const handleDeleteAgent = async () => {
     if (!editId || !spec) return;
-    if (previewRunning) {
-      window.alert(t("dashboard.deleteRunning"));
-      return;
-    }
-    if (!window.confirm(t("dashboard.deleteConfirm", { name: spec.name }))) return;
+    const msg = previewRunning
+      ? t("dashboard.deleteRunningConfirm", { name: spec.name })
+      : t("dashboard.deleteConfirm", { name: spec.name });
+    if (!window.confirm(msg)) return;
     setError("");
     try {
       await api.deleteAgent(editId);
@@ -329,6 +350,10 @@ export function CreateAgent() {
           </ul>
         )}
 
+        <label>{t("aiProvider.label")}</label>
+        <p className="hint-text">{t("aiProvider.agentsHint")}</p>
+        <AiProviderSelect disabled={isGenerating || loading} />
+
         <label>{t("create.effort")}</label>
         <p className="hint-text">{t("create.effortHint")}</p>
         <div className="effort-options">
@@ -395,6 +420,8 @@ export function CreateAgent() {
               thinkingStep={progress?.thinkingStep}
               budgetUsedSec={progress?.budgetUsedSec}
               onDismiss={dismissProgress}
+              onCancel={progress?.runId ? handleCancelRun : undefined}
+              cancelling={cancellingRun}
             />
           )}
         </div>

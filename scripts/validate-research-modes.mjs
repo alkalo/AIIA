@@ -37,21 +37,21 @@ describe("ResearchProfile configs", () => {
     assert.equal(p.fetchPolicy, "none");
     assert.equal(p.extractPolicy, "serp_only");
     assert.equal(p.llmRank, false);
-    assert.equal(p.wallClockBudgetSec, 240);
+    assert.equal(p.wallClockBudgetSec, 120);
   });
 
   it("Estándar enables LLM rank and top fetch", () => {
     const p = RESEARCH_PROFILES.medium;
     assert.equal(p.llmRank, true);
     assert.equal(p.fetchPolicy, "top");
-    assert.equal(p.extractTopK, 16);
+    assert.equal(p.extractTopK, 20);
   });
 
   it("Profundo has gap analysis and many waves", () => {
     const p = RESEARCH_PROFILES.high;
     assert.equal(p.gapAnalysis, true);
     assert.ok(p.searchWaves >= 8);
-    // ~30–60 min de presupuesto.
+    // ~30–75 min de presupuesto.
     assert.ok(p.wallClockBudgetSec >= 3600);
   });
 
@@ -60,6 +60,18 @@ describe("ResearchProfile configs", () => {
     assert.equal(p.useCritic, true);
     assert.equal(p.fetchPolicy, "deep");
     assert.equal(p.reasoningDepth, 3);
+    assert.equal(p.wallClockBudgetSec, 10800);
+    assert.equal(p.estimatedMinutes[1], 180);
+  });
+
+  it("ladder is strictly stronger on budget", () => {
+    const order = ["low", "medium", "high", "super_high", "ultra_high"];
+    for (let i = 1; i < order.length; i++) {
+      assert.ok(
+        RESEARCH_PROFILES[order[i]].wallClockBudgetSec >
+          RESEARCH_PROFILES[order[i - 1]].wallClockBudgetSec
+      );
+    }
   });
 });
 
@@ -130,7 +142,7 @@ describe("Model routing", () => {
 
 describe("Effort estimates", () => {
   it("formats minutes and hours", () => {
-    assert.match(getEffortEstimateFromProfile("low"), /min/);
+    assert.match(getEffortEstimateFromProfile("low"), /min|≤/);
     assert.match(getEffortEstimateFromProfile("ultra_high"), /h/);
   });
 });

@@ -1,3 +1,6 @@
+import type { MouseEvent } from "react";
+import { api } from "../api";
+
 /** Lightweight safe markdown for chat bubbles (no new deps). */
 function escapeHtml(s: string): string {
   return s
@@ -12,13 +15,19 @@ function inlineFormat(text: string): string {
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  // Markdown links first.
   s = s.replace(
     /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
-    '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>'
+    '<a href="$2" rel="noreferrer noopener">$1</a>'
   );
-  s = s.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
-    if (url.includes("</a>")) return url;
-    return `<a href="${url}" target="_blank" rel="noreferrer noopener">${url}</a>`;
+  // Bare URLs — never touch ones already inside href="..."
+  s = s.replace(/https?:\/\/[^\s<"]+/g, (url, offset: number, full: string) => {
+    const before = full.slice(Math.max(0, offset - 6), offset);
+    if (before === 'href="' || before.endsWith('href="')) return url;
+    // Already inside an <a>...</a> text node that somehow still has a URL
+    const head = full.slice(0, offset);
+    if (head.lastIndexOf("<a ") > head.lastIndexOf("</a>")) return url;
+    return `<a href="${url}" rel="noreferrer noopener">${url}</a>`;
   });
   return s;
 }
@@ -90,11 +99,31 @@ export function renderChatMarkdown(raw: string): string {
   return html.join("");
 }
 
+function isHttpUrl(href: string): boolean {
+  return /^https?:\/\//i.test(href);
+}
+
 export function ChatMarkdown({ content }: { content: string }) {
   if (!content) return null;
+
+  const onClick = (e: MouseEvent<HTMLDivElement>) => {
+    const el = e.target;
+    if (!(el instanceof Element)) return;
+    const anchor = el.closest("a");
+    if (!anchor) return;
+    const href = anchor.getAttribute("href") || "";
+    if (!isHttpUrl(href)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void api.openUrl(href).catch(() => {
+      /* opener may fail if URL malformed; leave UI quiet */
+    });
+  };
+
   return (
     <div
       className="chat-md"
+      onClick={onClick}
       dangerouslySetInnerHTML={{ __html: renderChatMarkdown(content) }}
     />
   );
