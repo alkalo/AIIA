@@ -6,6 +6,8 @@ import {
   fetchUrlAsSnippet,
   searchWeb,
   enginesForEffort,
+  isHardBlockSearchError,
+  resetSearchEngineHealth,
   type ScraperOptions,
   type SearchEngineId,
 } from "@aiia/scraper";
@@ -56,7 +58,7 @@ import {
   resolveOpportunityUrl,
 } from "./result-quality.js";
 import { sectorExpansionQueries, jobPortalDeepLinkSeeds } from "./sector-sources.js";
-import { grantExpansionQueries, grantSeedQueries } from "./grant-sources.js";
+import { grantExpansionQueries, grantSeedQueries, grantPortalDeepLinkSeeds } from "./grant-sources.js";
 import { isGrantTarget, isJobTarget } from "./opportunity-subtype.js";
 import { sortByDeadlineAsc } from "./deadline.js";
 
@@ -128,19 +130,21 @@ function resolveWaveQueries(
 function shouldStopForEmptyWaves(
   longMode: boolean,
   emptyWaves: number,
-  startTime: number,
-  profile: ResearchProfile,
-  rankedCount: number,
-  maxSources: number
+  _startTime: number,
+  _profile: ResearchProfile,
+  _rankedCount: number,
+  _maxSources: number,
+  serpExhausted = false,
+  emptySerpWaves = 0
 ): boolean {
-  const threshold = longMode ? 8 : 2;
+  // SERP engines rate-limited/captcha'd — stop hammering queries immediately.
+  if (serpExhausted) return true;
+  // Soft-dead SERP (0 hits for several waves) — do not keep spinning until wall-clock.
+  const softDeadThreshold = longMode ? 3 : 2;
+  if (emptySerpWaves >= softDeadThreshold) return true;
+  const threshold = longMode ? 4 : 2;
   if (emptyWaves < threshold) return false;
-  if (!longMode) return true;
-  const elapsed = budgetElapsedSec(startTime);
-  const searchBudget = profile.wallClockBudgetSec * 0.85;
-  if (elapsed < searchBudget && rankedCount < maxSources && budgetPhase(startTime, profile) !== "critical") {
-    return false;
-  }
+  // Seeds alone must not keep longMode searching forever under maxSources.
   return true;
 }
 
@@ -229,6 +233,8 @@ export class Executor {
     const maxSources = searchLimits.maxSources;
     const startTime = Date.now();
     let lastPercent = 0;
+    // Fresh engine health per run so a prior blocked run does not poison this one.
+    resetSearchEngineHealth();
 
     const progress = (
       phase: ProgressEvent["phase"],
@@ -302,7 +308,7 @@ export class Executor {
     this.searchLocale = searchLocale;
 
     const seedSources = await this.collectSeedSources(spec, log);
-    // Job agents: always inject portal deep-links so a dead SERP cannot yield zero coverage.
+    // Always inject portal deep-links for jobs/grants so a dead SERP cannot yield zero coverage.
     if (isJobTarget(spec) && !isGrantTarget(spec)) {
       const portals = jobPortalDeepLinkSeeds(spec);
       for (const s of portals) {
@@ -313,6 +319,20 @@ export class Executor {
           LogAction.WEB_SEARCH,
           `Semillas de portales de empleo: ${portals.length}`,
           undefined,
+          "searching"
+        );
+      }
+    }
+    if (isGrantTarget(spec)) {
+      const portals = grantPortalDeepLinkSeeds(spec);
+      for (const s of portals) {
+        seedSources.push({ title: s.title, url: s.url, snippet: s.snippet });
+      }
+      if (portals.length > 0) {
+        log(
+          LogAction.WEB_SEARCH,
+          `Semillas de portales de grants: ${portals.length}`,
+          portals.map((p) => `  → ${p.title} (${truncateUrl(p.url)})`).join("\n"),
           "searching"
         );
       }
@@ -368,6 +388,8 @@ export class Executor {
     const usedQueries = new Set<string>();
     let pendingNewQueries: string[] = [];
     let emptyWaves = 0;
+    let emptySerpWaves = 0;
+    let runSerpExhausted = false;
     // En modos largos buscamos muchas más consultas por ola y no paramos aunque
     // la cobertura se considere "suficiente": el objetivo es recorrer todas las
     // fuentes del sector hasta agotar el presupuesto de tiempo.
@@ -437,7 +459,7 @@ export class Executor {
       );
 
       const beforeCount = rankedSources.length;
-      const raw = await this.collectSourcesParallel(
+      const collected = await this.collectSourcesParallel(
         spec,
         waveQueries,
         maxSources,
@@ -453,8 +475,12 @@ export class Executor {
         rankedSources,
         searchLimits
       );
+      let raw = collected.results;
+      let serpExhausted = collected.serpExhausted;
+      if (serpExhausted) runSerpExhausted = true;
+      emptySerpWaves = raw.length === 0 ? emptySerpWaves + 1 : 0;
 
-      if (raw.length === 0 && wave === 0) {
+      if (raw.length === 0 && wave === 0 && !serpExhausted) {
         progress("searching", 12, "0 fuentes — reintentando consultas ampliadas…");
         const broader = broadenQueries(queries, spec.prompt, spec);
         registerUsed(broader);
@@ -475,9 +501,18 @@ export class Executor {
           [],
           searchLimits
         );
-        if (retry.length > 0) {
+        if (retry.serpExhausted) {
+          serpExhausted = true;
+          runSerpExhausted = true;
+        }
+        if (retry.results.length === 0 && raw.length === 0) {
+          emptySerpWaves = Math.max(emptySerpWaves, 1);
+        } else if (retry.results.length > 0) {
+          emptySerpWaves = 0;
+        }
+        if (retry.results.length > 0) {
           rankedSources = await rankSources(
-            dedupeHits([...rankedSources, ...retry]),
+            dedupeHits([...rankedSources, ...retry.results]),
             spec,
             profile,
             maxSources,
@@ -523,11 +558,31 @@ export class Executor {
       log(
         LogAction.INFO,
         `Ola ${wave + 1} — +${gained} fuentes (${rankedSources.length}/${maxSources} total, ${budgetElapsedSec(startTime)}s)`,
-        `Consultas: ${waveQueries.length} · sin progreso: ${emptyWaves} olas seguidas`,
+        `Consultas: ${waveQueries.length} · sin progreso: ${emptyWaves} olas seguidas${serpExhausted ? " · SERP bloqueado" : ""}`,
         "searching"
       );
-      if (shouldStopForEmptyWaves(longMode, emptyWaves, startTime, profile, rankedSources.length, maxSources)) {
-        log(LogAction.INFO, `Sin fuentes nuevas en ${emptyWaves} olas — fin de búsqueda`, undefined, "searching");
+      if (
+        shouldStopForEmptyWaves(
+          longMode,
+          emptyWaves,
+          startTime,
+          profile,
+          rankedSources.length,
+          maxSources,
+          serpExhausted || runSerpExhausted,
+          emptySerpWaves
+        )
+      ) {
+        log(
+          LogAction.INFO,
+          serpExhausted || runSerpExhausted
+            ? "Motores web bloqueados (captcha/rate-limit) — fin de búsqueda SERP; se usan semillas/portales y hits previos"
+            : emptySerpWaves >= 2
+              ? `SERP sin hits en ${emptySerpWaves} olas — fin de búsqueda; se usan semillas/portales`
+              : `Sin fuentes nuevas en ${emptyWaves} olas — fin de búsqueda`,
+          undefined,
+          "searching"
+        );
         break;
       }
 
@@ -579,13 +634,35 @@ export class Executor {
     progress("searching", 22, statsMsg);
 
     if (rankedSources.length === 0) {
-      log(LogAction.INFO, "Sin fuentes encontradas — fin de ejecución", statsMsg, "done");
-      progress("done", 100, "No se encontraron páginas. Comprueba Playwright o regenera el agente.");
-      this.runLog = undefined;
-      return {
-        results: [],
-        summary: "No se encontraron fuentes web.",
-      };
+      const emergencyPortals = isGrantTarget(spec)
+        ? grantPortalDeepLinkSeeds(spec)
+        : isJobTarget(spec)
+          ? jobPortalDeepLinkSeeds(spec)
+          : [];
+      if (emergencyPortals.length > 0) {
+        rankedSources = emergencyPortals.map((s) => ({
+          title: s.title,
+          url: s.url,
+          snippet: s.snippet,
+          relevance: 78,
+          fetchPriority: "skip" as const,
+          rankReason: "Emergency portal seeds",
+        }));
+        log(
+          LogAction.WEB_SEARCH,
+          `Sin SERP — se usan ${emergencyPortals.length} portales de cobertura`,
+          emergencyPortals.map((p) => `  → ${p.title}`).join("\n"),
+          "searching"
+        );
+      } else {
+        log(LogAction.INFO, "Sin fuentes encontradas — fin de ejecución", statsMsg, "done");
+        progress("done", 100, "No se encontraron páginas. Comprueba Playwright o regenera el agente.");
+        this.runLog = undefined;
+        return {
+          results: [],
+          summary: "No se encontraron fuentes web.",
+        };
+      }
     }
 
     const bPhase = budgetPhase(startTime, profile);
@@ -719,17 +796,89 @@ export class Executor {
       finalItems = serpToExtractedItems(rankedSources, spec)
         .map((item) => normalizeExtractedItem(item))
         .filter((item) => {
-          if (!validateOpportunityResult(item, spec)) return false;
-          if (!isGrantTarget(spec)) return true;
+          if (!isGrantTarget(spec)) return validateOpportunityResult(item, spec);
           const url = String(item.url ?? "");
-          return isDirectGrantUrl(url) || (!isLowQualityGrantUrl(url) &&
-            /\b(grant|funding|deadline|closing|opportunity)\b/i.test(
-              `${item.title ?? ""} ${item.description ?? ""} ${item.summary ?? ""}`
-            ));
+          const snippet = String(item.description ?? item.summary ?? item.reason ?? "");
+          // Portal deep-link seeds must survive when SERP is dead (homepages are intentional).
+          if (/portal seed/i.test(snippet)) return Boolean(url);
+          if (!validateOpportunityResult(item, spec)) return false;
+          return (
+            isDirectGrantUrl(url) ||
+            (!isLowQualityGrantUrl(url) &&
+              /\b(grant|funding|deadline|closing|opportunity)\b/i.test(
+                `${item.title ?? ""} ${item.description ?? ""} ${item.summary ?? ""}`
+              ))
+          );
         })
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
         .slice(0, Math.max(3, Math.ceil(rankedSources.length * 0.5)));
+      // Force portal deep-links from generators (not rankedSources) so coverage never evaporates.
+      if (finalItems.length === 0 && isGrantTarget(spec)) {
+        finalItems = grantPortalDeepLinkSeeds(spec)
+          .map((s) => {
+            const item = normalizeExtractedItem({
+              title: s.title,
+              url: s.url,
+              description: s.snippet,
+              summary: s.snippet,
+              score: 60,
+              reason: "Portal grant seed (SERP blocked / no deep listings)",
+            });
+            return { ...item, url: item.url ?? s.url, title: item.title ?? s.title };
+          })
+          .filter((item) => Boolean(item.url))
+          .slice(0, 12);
+      }
+      if (finalItems.length === 0 && isJobTarget(spec) && !isGrantTarget(spec)) {
+        finalItems = jobPortalDeepLinkSeeds(spec)
+          .map((s) => {
+            const item = normalizeExtractedItem({
+              title: s.title,
+              url: s.url,
+              description: s.snippet,
+              summary: s.snippet,
+              score: 60,
+              reason: "Portal job seed (SERP blocked / no deep listings)",
+            });
+            return { ...item, url: item.url ?? s.url, title: item.title ?? s.title };
+          })
+          .filter((item) => Boolean(item.url))
+          .slice(0, 12);
+      }
       progress("filtering", 78, `Fallback SERP — ${finalItems.length} enlaces`);
+    }
+
+    // Last resort / coverage merge: ensure portal seeds are present for grant/job agents
+    // even when a weak SERP item already filled finalItems, or SERP was exhausted.
+    if (isGrantTarget(spec) || isJobTarget(spec)) {
+      const portals = isGrantTarget(spec)
+        ? grantPortalDeepLinkSeeds(spec)
+        : jobPortalDeepLinkSeeds(spec);
+      if (portals.length > 0 && (finalItems.length === 0 || runSerpExhausted)) {
+        const seen = new Set(
+          finalItems.map((i) => String(i.url ?? "").toLowerCase()).filter(Boolean)
+        );
+        for (const s of portals) {
+          const key = s.url.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const item = normalizeExtractedItem({
+            title: s.title,
+            url: s.url,
+            description: s.snippet,
+            summary: s.snippet,
+            score: 58,
+            reason: runSerpExhausted
+              ? "Portal coverage seed (SERP blocked)"
+              : "Portal coverage seed",
+          });
+          if (item.url) finalItems.push(item);
+          if (finalItems.length >= 12) break;
+        }
+        if (finalItems.length > 0) {
+          progress("filtering", 79, `Cobertura por portales — ${finalItems.length} enlaces`);
+        }
+      }
     }
 
     if (finalItems.length === 0 && filtered.length > 0) {
@@ -833,20 +982,26 @@ export class Executor {
     log: ActionLogger,
     existing: RankedSource[],
     searchLimits: SearchLimits
-  ): Promise<SearchResult[]> {
+  ): Promise<{ results: SearchResult[]; serpExhausted: boolean }> {
     const collected: SearchResult[] = [];
     const seen = new Set(existing.map((r) => normalizeUrl(r.url)));
     const pending = queries.filter(Boolean);
     const perQuery = perQueryLimit(limit, searchLimits.maxResultsPerQuery, pending.length);
 
-    const searchConcurrency =
-      profile.searchWaves >= 8 ? 1 : Math.max(1, profile.parallelSearch);
+    // Sequential SERP: avoids rate-limit bursts and makes blocked-streak counting correct.
+    const searchConcurrency = 1;
+
+    let consecutiveBlocked = 0;
+    let serpExhausted = false;
+    let stopSerp = false;
 
     const batches = await mapPool(pending, searchConcurrency, async (query) => {
+      if (stopSerp) return [] as SearchResult[];
       const batch: SearchResult[] = [];
       for (const source of spec.search.sources) {
         if (source.type !== "duckduckgo") continue;
-        const { results, counts, errors } = await searchWeb(query, perQuery, {
+        if (stopSerp) break;
+        const { results, counts, errors, serpBlocked } = await searchWeb(query, perQuery, {
           engines: webEngines,
           debugDir: collected.length === 0 && existing.length === 0 ? debugDir : undefined,
           locale: this.searchLocale,
@@ -856,6 +1011,22 @@ export class Executor {
         }
         if (errors.length > 0 && collected.length === 0) {
           console.error("[search]", query, errors.map((e) => `${e.engine}: ${e.message}`).join("; "));
+        }
+        const hardErrors = errors.filter((e) => isHardBlockSearchError(e.message));
+        const blocked =
+          Boolean(serpBlocked) ||
+          (results.length === 0 &&
+            hardErrors.length > 0 &&
+            hardErrors.length >= Math.min(2, Math.max(1, errors.filter((e) => !/skipped/i.test(e.message)).length)));
+        if (blocked) {
+          consecutiveBlocked += 1;
+          // Always require 2 blocked queries — one flaky site: query must not kill the wave.
+          if (consecutiveBlocked >= 2) {
+            stopSerp = true;
+            serpExhausted = true;
+          }
+        } else if (results.length > 0) {
+          consecutiveBlocked = 0;
         }
         const countParts = Object.entries(counts)
           .filter(([, n]) => (n ?? 0) > 0)
@@ -872,6 +1043,7 @@ export class Executor {
             `Límite: ${perQuery} resultados/consulta · máx. ${limit} total`,
             countParts.length > 0 ? `Hits: ${countParts.join(", ")}` : "Sin hits",
             errors.length > 0 ? `Errores: ${errors.map((e) => `${e.engine}: ${e.message}`).join("; ")}` : "",
+            blocked ? "SERP degradado (rate-limit/captcha)" : "",
             topHits || undefined,
           ]
             .filter(Boolean)
@@ -894,8 +1066,17 @@ export class Executor {
       }
     }
 
+    if (serpExhausted) {
+      log(
+        LogAction.INFO,
+        "Corte anticipado de SERP: motores bloqueados — se continúa con portales/semillas y hits previos",
+        undefined,
+        "searching"
+      );
+    }
+
     progress("searching", 14, `${existing.length + collected.length}/${limit} fuentes encontradas`);
-    return collected;
+    return { results: collected, serpExhausted };
   }
 
   private async enrichRanked(

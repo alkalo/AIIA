@@ -14,6 +14,8 @@ export {
   searchWeb,
   searchDuckDuckGo,
   enginesForEffort,
+  isHardBlockSearchError,
+  resetSearchEngineHealth,
 } from "./search-engines.js";
 
 export interface ScraperOptions {

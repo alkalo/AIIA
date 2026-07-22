@@ -851,6 +851,10 @@ If this is a job board, present the URL to the user anyway. Do not say there are
       const mustSearch = messageRequiresWebSearch(messageText);
       // Clear job/offer intent → portals only (no LLM). Broader JOB_RE still upgrades mode elsewhere.
       const jobListingAsk = isJobOrListingSearch(messageText);
+      // Keep original user text for portal seeds even if tool queries drop job nouns.
+      if (mustSearch) {
+        lastUserJobQueryRef.current = messageText;
+      }
       const resolved = ensureSearchCoverageMode(chatMode, messageText);
       modeRef.current = resolved;
       setActiveModeLabel(

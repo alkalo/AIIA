@@ -31,17 +31,23 @@ export async function rankSources(
   numCtx: number
 ): Promise<RankedSource[]> {
   const heuristic = rankSearchResults(hits, spec, limit).map((r, i) => {
+    const isPortalSeed = /portal seed/i.test(r.snippet ?? "");
     const lowGrant =
       isGrantTarget(spec) &&
       isLowQualityGrantUrl(r.url) &&
-      !isDirectGrantUrl(r.url);
+      !isDirectGrantUrl(r.url) &&
+      !isPortalSeed;
     return {
       ...r,
-      relevance: lowGrant ? Math.min(40, 70 - i) : 70 - i,
-      fetchPriority: (profile.fetchPolicy === "none" || lowGrant
+      relevance: isPortalSeed ? 78 : lowGrant ? Math.min(40, 70 - i) : 70 - i,
+      fetchPriority: (profile.fetchPolicy === "none" || lowGrant || isPortalSeed
         ? "skip"
         : "medium") as FetchPriority,
-      rankReason: lowGrant ? "Portal homepage — skip fetch" : "Heuristic rank",
+      rankReason: isPortalSeed
+        ? "Portal seed — keep for coverage, skip fetch"
+        : lowGrant
+          ? "Portal homepage — skip fetch"
+          : "Heuristic rank",
     };
   });
 
@@ -78,13 +84,20 @@ Prioritize authoritative sources matching the goal. Prefer individual grant/call
     }
 
     const merged: RankedSource[] = hits.map((r) => {
+      const isPortalSeed = /portal seed/i.test(r.snippet ?? "");
       const llm = byUrl.get(normalizeUrlKey(r.url));
-      const relevance = llm?.relevance ?? 50;
+      const relevance = isPortalSeed
+        ? Math.max(78, llm?.relevance ?? 78)
+        : (llm?.relevance ?? 50);
       return {
         ...r,
         relevance,
-        fetchPriority: llm?.fetchPriority ?? (relevance >= 60 ? "medium" : "skip"),
-        rankReason: llm?.reason ?? "LLM rank",
+        fetchPriority: (isPortalSeed
+          ? "skip"
+          : llm?.fetchPriority ?? (relevance >= 60 ? "medium" : "skip")) as FetchPriority,
+        rankReason: isPortalSeed
+          ? "Portal seed — keep for coverage, skip fetch"
+          : llm?.reason ?? "LLM rank",
       };
     });
 
@@ -100,10 +113,22 @@ function applyFetchPolicy(
   profile: ResearchProfile,
   limit: number
 ): RankedSource[] {
+  const pinned = ranked.filter((r) => /portal seed/i.test(r.snippet ?? ""));
+  const rest = ranked.filter((r) => !/portal seed/i.test(r.snippet ?? ""));
+  const room = Math.max(0, limit - pinned.length);
+  const merged = [
+    ...pinned.map((r) => ({
+      ...r,
+      fetchPriority: "skip" as FetchPriority,
+      relevance: Math.max(r.relevance ?? 0, 78),
+      rankReason: r.rankReason ?? "Portal seed — keep for coverage, skip fetch",
+    })),
+    ...rest.slice(0, room),
+  ];
   if (profile.fetchPolicy === "none") {
-    return ranked.slice(0, limit).map((r) => ({ ...r, fetchPriority: "skip" }));
+    return merged.map((r) => ({ ...r, fetchPriority: "skip" as FetchPriority }));
   }
-  return ranked.slice(0, limit);
+  return merged;
 }
 
 export function sourcesToFetch(

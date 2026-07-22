@@ -26,6 +26,8 @@ export interface SearchWebResponse {
   results: WebSearchResult[];
   errors: { engine: SearchEngineId; message: string }[];
   counts: Partial<Record<SearchEngineId, number>>;
+  /** True when attempted engines failed with rate-limit/captcha and yielded 0 hits. */
+  serpBlocked?: boolean;
 }
 
 export const USER_AGENT =
@@ -40,6 +42,50 @@ const ALL_ENGINES: SearchEngineId[] = [
   "ecosia",
 ];
 
+/** Cross-query engine health: skip rate-limited/captcha engines for a cooldown window. */
+const ENGINE_FAIL_THRESHOLD = 2;
+const ENGINE_COOLDOWN_MS = 90_000;
+type EngineHealth = { fails: number; cooldownUntil: number; successes: number };
+const engineHealth = new Map<SearchEngineId, EngineHealth>();
+
+function healthOf(id: SearchEngineId): EngineHealth {
+  let h = engineHealth.get(id);
+  if (!h) {
+    h = { fails: 0, cooldownUntil: 0, successes: 0 };
+    engineHealth.set(id, h);
+  }
+  return h;
+}
+
+function isEngineCooling(id: SearchEngineId): boolean {
+  return Date.now() < healthOf(id).cooldownUntil;
+}
+
+function noteEngineSuccess(id: SearchEngineId): void {
+  const h = healthOf(id);
+  h.fails = 0;
+  h.cooldownUntil = 0;
+  h.successes += 1;
+}
+
+function noteEngineFailure(id: SearchEngineId): void {
+  const h = healthOf(id);
+  h.fails += 1;
+  if (h.fails >= ENGINE_FAIL_THRESHOLD) {
+    h.cooldownUntil = Date.now() + ENGINE_COOLDOWN_MS;
+    h.fails = 0;
+  }
+}
+
+export function isHardBlockSearchError(message: string): boolean {
+  if (/cooling down|skipped/i.test(message)) return false;
+  return /rate limit|captcha|bot check|\b403\b|\b429\b/i.test(message);
+}
+
+/** Test helper / run reset. */
+export function resetSearchEngineHealth(): void {
+  engineHealth.clear();
+}
 // ---------------------------------------------------------------------------
 // Browser (solo se usa para leer páginas, no para buscar).
 // ---------------------------------------------------------------------------
@@ -630,30 +676,74 @@ export async function searchWeb(
   const counts: Partial<Record<SearchEngineId, number>> = {};
   let merged: WebSearchResult[] = [];
 
+  const live = engines.filter((e) => !isEngineCooling(e));
+  const allCooling = engines.length > 0 && live.length === 0;
+
+  // Prefer recently successful engines; skip those in cooldown.
+  const ordered = [...engines].sort((a, b) => {
+    const coolA = isEngineCooling(a) ? 1 : 0;
+    const coolB = isEngineCooling(b) ? 1 : 0;
+    if (coolA !== coolB) return coolA - coolB;
+    return healthOf(b).successes - healthOf(a).successes;
+  });
+
+  let attempted = 0;
+  let hardBlockFails = 0;
+
   // Secuencial con parada temprana: evita rate limits por ráfagas paralelas.
-  for (const engineId of engines) {
+  for (const engineId of ordered) {
     if (merged.length >= maxResults) break;
+    if (isEngineCooling(engineId)) {
+      errors.push({
+        engine: engineId,
+        message: `${engineId}: cooling down after prior block (skipped)`,
+      });
+      continue;
+    }
+    attempted += 1;
     const need = maxResults - merged.length;
     const outcome = await runEngine(engineId, query, need, locale);
     counts[engineId] = (counts[engineId] ?? 0) + outcome.results.length;
-    if (outcome.error && outcome.results.length === 0) {
+    if (outcome.results.length > 0) {
+      noteEngineSuccess(engineId);
+    } else if (outcome.error) {
       errors.push({ engine: engineId, message: outcome.error });
+      // Only hard blocks (403/429/captcha) cool the engine — empty/irrelevant parses do not.
+      if (outcome.retryable && isHardBlockSearchError(outcome.error)) {
+        noteEngineFailure(engineId);
+        hardBlockFails += 1;
+      }
     }
     merged = dedupeResults([...merged, ...outcome.results]);
   }
 
-  // Fallback Playwright si aún faltan resultados (también cuando Bing ya estaba en la lista
-  // pero solo aportó HTTP vacío / bloqueado).
+  // Blocked = hard failures on attempted engines, OR every engine already cooling.
+  const serpBlocked =
+    merged.length === 0 &&
+    (allCooling ||
+      (attempted > 0 && hardBlockFails >= Math.min(2, attempted)) ||
+      (attempted > 0 && hardBlockFails === attempted && attempted >= 1));
+
+  // External Bing Playwright when Bing was NOT already in the engine list
+  // (searchBing already does HTTP→browser). Allow even if other engines hard-blocked
+  // so low-effort runs still get a last-resort browser attempt.
   const minBeforeBrowser = Math.min(3, maxResults);
-  if (merged.length < minBeforeBrowser) {
+  const bingAlreadyTried = engines.includes("bing");
+  if (merged.length < minBeforeBrowser && !bingAlreadyTried && !isEngineCooling("bing")) {
     const browserOutcome = await throttleHost("bing.com", 1500, () =>
       searchBingWithBrowser(query, maxResults - merged.length, locale)
     );
     if (browserOutcome.results.length > 0) {
+      noteEngineSuccess("bing");
       counts.bing = (counts.bing ?? 0) + browserOutcome.results.length;
       merged = dedupeResults([...merged, ...browserOutcome.results]);
-    } else if (browserOutcome.error && !errors.some((e) => e.engine === "bing")) {
-      errors.push({ engine: "bing", message: browserOutcome.error });
+    } else if (browserOutcome.error) {
+      if (isHardBlockSearchError(browserOutcome.error)) {
+        noteEngineFailure("bing");
+      }
+      if (!errors.some((e) => e.engine === "bing")) {
+        errors.push({ engine: "bing", message: browserOutcome.error });
+      }
     }
   }
 
@@ -661,6 +751,7 @@ export async function searchWeb(
     results: merged.slice(0, maxResults),
     errors,
     counts,
+    serpBlocked: merged.length === 0 && serpBlocked,
   };
 }
 

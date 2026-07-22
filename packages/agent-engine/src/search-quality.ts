@@ -142,6 +142,8 @@ export function jobTargetAdjustment(url: string, contentBlob: string, spec: Agen
 /** Ajuste de puntuación para convocatorias y subvenciones. */
 export function grantTargetAdjustment(url: string, contentBlob: string, spec: AgentSpec): number {
   if (!isGrantTarget(spec)) return 0;
+  // Intentional portal deep-link seeds must stay visible when SERP is blocked.
+  if (/portal seed/i.test(contentBlob)) return 15;
   let adj = 0;
   const hay = contentBlob.toLowerCase();
   try {
@@ -209,11 +211,15 @@ export function rankSearchResults(
     score += opportunityTargetAdjustment(r.url, blob, spec);
     if (r.title.length > 10) score += 5;
     if (r.snippet.length > 40) score += 5;
+    if (/portal seed/i.test(r.snippet ?? "")) score += 40;
     return { result: r, score };
   });
 
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, limit).map((s) => s.result);
+  const pinned = scored.filter((s) => /portal seed/i.test(s.result.snippet ?? ""));
+  const rest = scored.filter((s) => !/portal seed/i.test(s.result.snippet ?? ""));
+  const room = Math.max(0, limit - pinned.length);
+  return [...pinned.map((s) => s.result), ...rest.slice(0, room).map((s) => s.result)];
 }
 
 export function heuristicItemScore(

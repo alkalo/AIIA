@@ -34,9 +34,15 @@ const LOW_QUALITY_JOB_URL_PATTERNS = [
   /linkedin\.com\/advice\//i,
   /business\.linkedin\.com/i,
   /\/reviews?\//i,
+  // Generic site search pages — exclude known job-board search deep-links.
   /\/search\?/i,
 ];
 
+function isKnownJobBoardSearchUrl(url: string): boolean {
+  return /linkedin\.com\/jobs\/search|indeed\.com\/jobs|infojobs\.net\/jobsearch|remoteok\.com\/remote-jobs|weworkremotely\.com\/remote-jobs\/search|jooble\.org\/SearchResult|tecnoempleo\.com\/busqueda|glassdoor\.[a-z.]+\/Job\//i.test(
+    url
+  );
+}
 /** Limpia texto extraído: recorta, elimina basura repetida de formularios web. */
 export function sanitizeFieldValue(value: unknown, maxLen = 120): string {
   if (value == null) return "";
@@ -65,6 +71,7 @@ export function isDirectJobPostingUrl(url: string): boolean {
 
 export function isLowQualityJobUrl(url: string): boolean {
   if (!url) return true;
+  if (isKnownJobBoardSearchUrl(url)) return false;
   return LOW_QUALITY_JOB_URL_PATTERNS.some((p) => p.test(url));
 }
 

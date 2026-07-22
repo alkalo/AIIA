@@ -47,10 +47,12 @@ const DEAL_KEYWORDS = [
   "deal",
   "deals",
   "discount",
-  "offer",
-  "oferta",
+  "descuento",
   "promo",
   "coupon",
+  "cupón",
+  "cupon",
+  "rebaja",
 ];
 
 const JOB_KEYWORDS = [
@@ -65,12 +67,19 @@ const JOB_KEYWORDS = [
   "position",
   "career",
   "trabajo",
+  "trabajos",
+  "oferta",
+  "ofertas",
+  "offer",
   "salario",
   "salary",
   "apply",
   "aplicar",
   "remote role",
   "job opening",
+  "qa ",
+  "developer",
+  "engineer",
 ];
 
 function specBlob(spec: AgentSpec): string {
@@ -89,8 +98,9 @@ function inferSubtype(spec: AgentSpec): OpportunitySubtype {
   if (matchesAny(blob, GRANT_KEYWORDS)) return "grants";
   if (matchesAny(blob, TENDER_KEYWORDS)) return "tenders";
   if (matchesAny(blob, EVENT_KEYWORDS)) return "events";
-  if (matchesAny(blob, DEAL_KEYWORDS)) return "deals";
+  // Jobs before deals: "oferta/offer" alone used to mis-classify employment as deals.
   if (matchesAny(blob, JOB_KEYWORDS)) return "jobs";
+  if (matchesAny(blob, DEAL_KEYWORDS)) return "deals";
 
   if (tpl === "opportunities" || tpl === "monitoring") return "custom";
   return "custom";

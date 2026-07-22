@@ -207,3 +207,117 @@ export function grantSeedQueries(spec: AgentSpec, max = 12): string[] {
 
   return out.slice(0, max);
 }
+
+export interface GrantPortalSeed {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+/**
+ * Deep-link portal seeds so grant agents never finish with zero sources when SERP is blocked.
+ * Uses stable https portals (not fragile planner-invented URLs).
+ */
+export function grantPortalDeepLinkSeeds(spec: AgentSpec): GrantPortalSeed[] {
+  if (!isGrantTarget(spec)) return [];
+  const blob = `${spec.prompt} ${spec.filters.criteria}`;
+  const au = /australia|australian|au\b/i.test(blob);
+  const nz = /new zealand|nz\b/i.test(blob);
+  const eu = /europe|eu\b|horizon|european/i.test(blob);
+  const es = /spain|españa|boe\.es/i.test(blob) && !au && !nz;
+
+  const seeds: GrantPortalSeed[] = [
+    {
+      title: "Funds for NGOs — grants",
+      url: "https://www2.fundsforngos.org/",
+      snippet: "Portal seed: global NGO / community grant listings.",
+    },
+    {
+      title: "GlobalGiving",
+      url: "https://www.globalgiving.org/",
+      snippet: "Portal seed: GlobalGiving.",
+    },
+  ];
+
+  if (au || (!au && !nz && !es)) {
+    seeds.unshift(
+      {
+        title: "Community Grants Hub (AU)",
+        url: "https://www.communitygrants.gov.au/",
+        snippet: "Portal seed: Australian Community Grants Hub.",
+      },
+      {
+        title: "GrantConnect / grants.gov.au",
+        url: "https://www.grants.gov.au/",
+        snippet: "Portal seed: Australian Government grants.",
+      },
+      {
+        title: "business.gov.au — Grants and programs",
+        url: "https://business.gov.au/grants-and-programs",
+        snippet: "Portal seed: Australian business / community grant programs.",
+      },
+      {
+        title: "FRRR — Foundation for Rural & Regional Renewal",
+        url: "https://frrr.org.au/",
+        snippet: "Portal seed: FRRR community funding.",
+      },
+      {
+        title: "Philanthropy Australia",
+        url: "https://www.philanthropy.org.au/",
+        snippet: "Portal seed: Philanthropy Australia.",
+      },
+      {
+        title: "Grantly (AU)",
+        url: "https://www.grantly.au/",
+        snippet: "Portal seed: Grantly community grant portal.",
+      }
+    );
+  }
+
+  if (nz) {
+    seeds.unshift(
+      {
+        title: "Community Matters (NZ)",
+        url: "https://www.communitymatters.govt.nz/",
+        snippet: "Portal seed: NZ community funding.",
+      },
+      {
+        title: "New Zealand Government — Funding",
+        url: "https://www.govt.nz/browse/engaging-with-government/funding/",
+        snippet: "Portal seed: NZ government funding browse.",
+      }
+    );
+  }
+
+  if (eu) {
+    seeds.push({
+      title: "EU Funding & Tenders Portal",
+      url: "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/home",
+      snippet: "Portal seed: EU Funding & Tenders.",
+    });
+  }
+
+  if (es) {
+    seeds.push(
+      {
+        title: "BOE — Boletín Oficial del Estado",
+        url: "https://www.boe.es/",
+        snippet: "Portal seed: convocatorias España.",
+      },
+      {
+        title: "Sede Administración — ayudas",
+        url: "https://sede.administracion.gob.es/",
+        snippet: "Portal seed: sede electrónica España.",
+      }
+    );
+  }
+
+  // Dedupe by URL
+  const seen = new Set<string>();
+  return seeds.filter((s) => {
+    const k = s.url.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
