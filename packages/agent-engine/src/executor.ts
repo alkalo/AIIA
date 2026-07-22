@@ -18,9 +18,12 @@ import {
   budgetPhase,
   budgetElapsedSec,
   shouldStopWaves,
+  geminiModelsForEffort,
+  GeminiClient,
   type EffortConfig,
   type EffortLevel,
   type ResearchProfile,
+  type LlmClient,
 } from "@aiia/ollama-client";
 import type { AgentSpec, ExtractedItem, ProgressEvent, SearchResult, LoginRequirement } from "./types.js";
 import { resolveSearchLimits, perQueryLimit, type SearchLimits } from "./search-limits.js";
@@ -143,14 +146,14 @@ function shouldStopForEmptyWaves(
 export type ProgressCallback = (event: ProgressEvent) => void;
 
 export class Executor {
-  private ollama: OllamaClient;
+  private ollama: LlmClient;
   private plannerModel = "qwen2.5:7b";
   private extractorModel = "qwen2.5:3b";
   private criticModel?: string;
   private runLog?: ActionLogger;
   private searchLocale = "en-US";
 
-  constructor(ollama?: OllamaClient) {
+  constructor(ollama?: LlmClient) {
     this.ollama = ollama ?? new OllamaClient();
   }
 
@@ -204,10 +207,17 @@ export class Executor {
     scraperOptions?: ScraperOptions
   ): Promise<{ results: ExtractedItem[]; summary: string }> {
     const hw = await detectHardware();
-    const models = resolveModels(hw, effort);
-    this.plannerModel = models.plannerModel;
-    this.extractorModel = models.extractorModel;
-    this.criticModel = models.criticModel;
+    if (this.ollama instanceof GeminiClient) {
+      const models = geminiModelsForEffort(effort);
+      this.plannerModel = models.plannerModel;
+      this.extractorModel = models.extractorModel;
+      this.criticModel = models.criticModel;
+    } else {
+      const models = resolveModels(hw, effort);
+      this.plannerModel = models.plannerModel;
+      this.extractorModel = models.extractorModel;
+      this.criticModel = models.criticModel;
+    }
 
     const cfg = this.initModels(effort);
     const profile = getResearchProfile(effort);
@@ -259,7 +269,7 @@ export class Executor {
       "Configuración del agente",
       [
         `Agente: ${spec.name}`,
-        `Modo: ${effort} · perfil ${hw.profile} · ${hw.cpuCores} núcleos · ${hw.totalRamGb} GB RAM`,
+        `Modo: ${effort} · provider=${this.ollama instanceof GeminiClient ? "gemini" : "local"} · perfil ${hw.profile} · ${hw.cpuCores} núcleos · ${hw.totalRamGb} GB RAM`,
         `Modelos: plan=${this.plannerModel}, extract=${this.extractorModel}${this.criticModel ? `, critic=${this.criticModel}` : ""}`,
         `Estrategia: olas=${profile.searchWaves}, rank IA=${profile.llmRank ? "sí" : "no"}, fetch=${profile.fetchPolicy}, extract=${profile.extractPolicy}`,
         `Límite de enlaces: ${maxSources}${searchLimits.fromAgentConfig ? " (configurado en agente)" : ` (modo ${effort})`}`,

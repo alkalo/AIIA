@@ -1,4 +1,4 @@
-import type { OllamaClient } from "@aiia/ollama-client";
+import type { LlmClient } from "@aiia/ollama-client";
 import type { ResearchProfile } from "@aiia/ollama-client";
 import type { AgentSpec } from "./types.js";
 import { buildQueriesFromPrompt } from "./query-replan.js";
@@ -34,7 +34,7 @@ export function fallbackSearchPlan(spec: AgentSpec): SearchPlan {
 export async function buildSearchPlan(
   spec: AgentSpec,
   profile: ResearchProfile,
-  ollama: OllamaClient,
+  ollama: LlmClient,
   plannerModel: string,
   numCtx: number
 ): Promise<SearchPlan> {
@@ -112,7 +112,7 @@ export async function analyzeCoverage(
   spec: AgentSpec,
   plan: SearchPlan,
   collected: { title: string; url: string; snippet: string }[],
-  ollama: OllamaClient,
+  ollama: LlmClient,
   plannerModel: string,
   numCtx: number
 ): Promise<CoverageAnalysis> {

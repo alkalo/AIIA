@@ -71,7 +71,8 @@ async function main(): Promise<void> {
 
   const spec = await loadAgentSpec(dataDir, agentId);
   process.env.AIIA_RUN_ID = runId;
-  const executor = new Executor();
+  const { OllamaClient, createLlmClientFromEnv } = await import("@aiia/ollama-client");
+  const executor = new Executor(createLlmClientFromEnv(new OllamaClient()));
 
   const progressFile = join(dataDir, "progress", `${agentId}.json`);
   await mkdir(join(dataDir, "progress"), { recursive: true });

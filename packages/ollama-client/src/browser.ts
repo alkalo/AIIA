@@ -103,11 +103,18 @@ export interface ChatOptions {
   timeoutMs?: number;
 }
 
+export interface LlmClient {
+  chat(messages: ChatMessage[], options: ChatOptions): Promise<string>;
+  isAvailable(): Promise<boolean>;
+  listModels(): Promise<string[]>;
+  pullModel(model: string, onProgress?: (status: string) => void): Promise<void>;
+}
+
 export interface OllamaClientOptions {
   baseUrl?: string;
 }
 
-export class OllamaClient {
+export class OllamaClient implements LlmClient {
   private baseUrl: string;
 
   constructor(options: OllamaClientOptions = {}) {
@@ -219,6 +226,15 @@ export type {
   ResolvedModels,
   BudgetPhase,
 } from "./research-profile.js";
+
+export {
+  GeminiClient,
+  createLlmClient,
+  geminiModelsForEffort,
+  GEMINI_FLASH,
+  GEMINI_PRO,
+} from "./gemini.js";
+export type { AiProviderId, CreateLlmClientOptions } from "./gemini.js";
 
 export function modelForProfile(profile: string, role: "planner" | "extractor"): string {
   const map: Record<string, [string, string]> = {

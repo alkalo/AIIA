@@ -151,6 +151,13 @@ export interface UpdatePrefs {
   autoUpdateOnStartup: boolean;
 }
 
+export type AiProviderId = "local" | "gemini";
+
+export interface AiProviderStatus {
+  provider: AiProviderId | string;
+  hasGeminiKey: boolean;
+}
+
 export const api = {
   getHardwareInfo: () => invoke<HardwareInfo>("get_hardware_info"),
   checkOllama: () => invoke<boolean>("check_ollama"),
@@ -300,6 +307,46 @@ export const api = {
       temperature,
       numCtx,
     }),
+  llmChat: (
+    model: string,
+    messages: { role: string; content: string; images?: string[] }[],
+    temperature?: number,
+    numCtx?: number,
+    format?: string,
+    provider?: string
+  ) =>
+    invoke<string>("llm_chat", {
+      model,
+      messages,
+      temperature,
+      numCtx,
+      format: format ?? null,
+      provider: provider ?? null,
+    }),
+  llmChatStream: (
+    streamId: string,
+    model: string,
+    messages: { role: string; content: string; images?: string[] }[],
+    temperature?: number,
+    numCtx?: number,
+    provider?: string
+  ) =>
+    invoke("llm_chat_stream", {
+      streamId,
+      model,
+      messages,
+      temperature,
+      numCtx,
+      provider: provider ?? null,
+    }),
+  getAiProviderStatus: () => invoke<AiProviderStatus>("get_ai_provider_status"),
+  setAiProvider: (provider: AiProviderId | string) =>
+    invoke<AiProviderStatus>("set_ai_provider", { provider }),
+  setGeminiApiKey: (apiKey: string) =>
+    invoke<AiProviderStatus>("set_gemini_api_key", { apiKey }),
+  clearGeminiApiKey: () => invoke<AiProviderStatus>("clear_gemini_api_key"),
+  testGeminiApiKey: (apiKey?: string) =>
+    invoke("test_gemini_api_key", { apiKey: apiKey ?? null }),
   cancelChatStream: (streamId: string) =>
     invoke("cancel_chat_stream", { streamId }),
 };

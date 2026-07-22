@@ -220,8 +220,8 @@ pub fn draft_agent_from_prompt(name: &str, prompt: &str) -> AgentSpec {
     }
 }
 
-pub const CHAT_SYSTEM_PROMPT: &str = r#"You are AIIA Chat, the local assistant inside the AIIA desktop app.
-You run on the user's PC via Ollama (free, no paid cloud APIs). Reply in the same language as the user's latest message.
+pub const CHAT_SYSTEM_PROMPT: &str = r#"You are AIIA Chat, the assistant inside the AIIA desktop app.
+You run on the user's PC. Prefer local AI (Ollama) when that mode is active; when Gemini mode is active you use the user's own Gemini API key. Reply in the same language as the user's latest message.
 Be helpful, clear, and concise. You can see images the user attaches.
 
 You can use tools by emitting exactly one of these tags when needed (no other text inside the tag):

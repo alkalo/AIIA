@@ -3,12 +3,12 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { SiteConnectorAgent, type SiteConnectionPlan } from "@aiia/agent-engine/browser";
 import {
-  DesktopOllamaClient,
+  DesktopLlmClient,
   formatOllamaError,
   OLLAMA_DOWNLOAD_URL,
   prepareOllamaForPlanner,
 } from "../ollama-desktop";
-import { api, type CredentialSummary, type OllamaSetupProgress, type UpdateStatus, type AppInfo } from "../api";
+import { api, type CredentialSummary, type OllamaSetupProgress, type UpdateStatus, type AppInfo, type AiProviderId } from "../api";
 
 type WizardStep = "idle" | "plan" | "connect";
 
@@ -31,6 +31,12 @@ export function Settings() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [autoUpdate, setAutoUpdate] = useState(false);
   const [updateError, setUpdateError] = useState("");
+  const [aiProvider, setAiProvider] = useState<AiProviderId>("local");
+  const [hasGeminiKey, setHasGeminiKey] = useState(false);
+  const [geminiKeyInput, setGeminiKeyInput] = useState("");
+  const [geminiBusy, setGeminiBusy] = useState(false);
+  const [geminiMsg, setGeminiMsg] = useState("");
+  const [geminiErr, setGeminiErr] = useState("");
 
   const [siteName, setSiteName] = useState("");
   const [wizardStep, setWizardStep] = useState<WizardStep>("idle");
@@ -55,6 +61,10 @@ export function Settings() {
     api.getSetting("retention_days").then((v) => v && setRetention(v));
     api.getAppInfo().then(setAppInfo);
     api.getUpdatePrefs().then((prefs) => setAutoUpdate(prefs.autoUpdateOnStartup));
+    api.getAiProviderStatus().then((s) => {
+      setAiProvider(s.provider === "gemini" ? "gemini" : "local");
+      setHasGeminiKey(s.hasGeminiKey);
+    });
     refreshCredentials();
 
     let unlistenUpdate: (() => void) | undefined;
@@ -145,6 +155,72 @@ export function Settings() {
     await api.setUpdatePrefs(enabled);
   };
 
+  const applyProviderStatus = (s: { provider: string; hasGeminiKey: boolean }) => {
+    setAiProvider(s.provider === "gemini" ? "gemini" : "local");
+    setHasGeminiKey(s.hasGeminiKey);
+  };
+
+  const handleProviderChange = async (next: AiProviderId) => {
+    setGeminiErr("");
+    setGeminiMsg("");
+    if (next === "gemini" && !hasGeminiKey) {
+      setGeminiErr(t("settings.geminiNeedKey"));
+      return;
+    }
+    try {
+      const s = await api.setAiProvider(next);
+      applyProviderStatus(s);
+    } catch (e) {
+      setGeminiErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleSaveGeminiKey = async () => {
+    if (!geminiKeyInput.trim()) return;
+    setGeminiBusy(true);
+    setGeminiErr("");
+    setGeminiMsg("");
+    try {
+      const s = await api.setGeminiApiKey(geminiKeyInput.trim());
+      applyProviderStatus(s);
+      setGeminiKeyInput("");
+      setGeminiMsg(t("settings.geminiKeySaved"));
+    } catch (e) {
+      setGeminiErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeminiBusy(false);
+    }
+  };
+
+  const handleClearGeminiKey = async () => {
+    setGeminiBusy(true);
+    setGeminiErr("");
+    setGeminiMsg("");
+    try {
+      const s = await api.clearGeminiApiKey();
+      applyProviderStatus(s);
+      setGeminiMsg("");
+    } catch (e) {
+      setGeminiErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeminiBusy(false);
+    }
+  };
+
+  const handleTestGeminiKey = async () => {
+    setGeminiBusy(true);
+    setGeminiErr("");
+    setGeminiMsg("");
+    try {
+      await api.testGeminiApiKey(geminiKeyInput.trim() || undefined);
+      setGeminiMsg(t("settings.geminiTestOk"));
+    } catch (e) {
+      setGeminiErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeminiBusy(false);
+    }
+  };
+
   const updateProgress =
     updateStatus?.phase === "downloading" && updateStatus.percent != null
       ? updateStatus.percent
@@ -157,7 +233,7 @@ export function Settings() {
     try {
       const profile = hw?.profile ?? "medium";
       await prepareOllamaForPlanner(profile);
-      const connector = new SiteConnectorAgent(profile, new DesktopOllamaClient());
+      const connector = new SiteConnectorAgent(profile, new DesktopLlmClient());
       const lang = i18n.language.startsWith("es") ? "es" : "en";
       const result = await connector.analyzeSite(siteName.trim(), lang);
       setPlan(result);
@@ -199,6 +275,90 @@ export function Settings() {
   return (
     <div>
       <h2>{t("settings.title")}</h2>
+
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <h3>{t("settings.aiProvider")}</h3>
+        <p className="hint-text">{t("settings.aiProviderHint")}</p>
+        <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <input
+              type="radio"
+              name="ai-provider"
+              checked={aiProvider === "local"}
+              onChange={() => void handleProviderChange("local")}
+            />
+            {t("settings.providerLocal")}
+          </label>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              opacity: hasGeminiKey ? 1 : 0.55,
+            }}
+            title={hasGeminiKey ? undefined : t("settings.geminiNeedKey")}
+          >
+            <input
+              type="radio"
+              name="ai-provider"
+              checked={aiProvider === "gemini"}
+              disabled={!hasGeminiKey}
+              onChange={() => void handleProviderChange("gemini")}
+            />
+            {t("settings.providerGemini")}
+          </label>
+        </div>
+        <label style={{ marginTop: "0.75rem", display: "block" }}>{t("settings.geminiApiKey")}</label>
+        <p className="hint-text">
+          {hasGeminiKey ? t("settings.geminiKeySaved") : t("settings.geminiKeyMissing")}
+        </p>
+        <input
+          type="password"
+          className="input"
+          autoComplete="off"
+          placeholder={t("settings.geminiApiKeyPlaceholder")}
+          value={geminiKeyInput}
+          onChange={(e) => setGeminiKeyInput(e.target.value)}
+          style={{ maxWidth: 420 }}
+        />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={geminiBusy || !geminiKeyInput.trim()}
+            onClick={() => void handleSaveGeminiKey()}
+          >
+            {t("settings.geminiSaveKey")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={geminiBusy || (!geminiKeyInput.trim() && !hasGeminiKey)}
+            onClick={() => void handleTestGeminiKey()}
+          >
+            {geminiBusy ? t("settings.geminiTesting") : t("settings.geminiTestKey")}
+          </button>
+          {hasGeminiKey && (
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              disabled={geminiBusy}
+              onClick={() => void handleClearGeminiKey()}
+            >
+              {t("settings.geminiClearKey")}
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-outline btn-sm"
+            onClick={() => void api.openUrl("https://aistudio.google.com/apikey")}
+          >
+            {t("settings.geminiGetKey")}
+          </button>
+        </div>
+        {geminiMsg && <p className="status-ok" style={{ marginTop: "0.5rem" }}>{geminiMsg}</p>}
+        {geminiErr && <p className="error-text" style={{ marginTop: "0.5rem" }}>{geminiErr}</p>}
+      </div>
 
       <div className="card" style={{ marginBottom: "1rem" }}>
         <h3>{t("settings.ollama")}</h3>

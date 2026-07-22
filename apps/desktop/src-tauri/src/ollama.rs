@@ -542,7 +542,7 @@ pub struct ChatStreamEvent {
     pub error: Option<String>,
 }
 
-fn is_stream_cancelled(
+pub(crate) fn is_stream_cancelled(
     cancel_set: &std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     stream_id: &str,
 ) -> bool {

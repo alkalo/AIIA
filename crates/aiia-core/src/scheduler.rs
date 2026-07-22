@@ -244,6 +244,7 @@ pub fn spawn_agent_runner(
     effort: &str,
     data_dir: &PathBuf,
     run_id: &str,
+    extra_env: &[(&str, String)],
 ) -> Result<std::process::Child> {
     if !runner_path.exists() {
         return Err(CoreError::InvalidState(format!(
@@ -261,6 +262,9 @@ pub fn spawn_agent_runner(
 
     let mut cmd = std::process::Command::new(&config.node_exe);
     configure_runner_command(&mut cmd, config);
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
     let child = cmd
         .arg(runner_path)
         .arg("--agent-id")

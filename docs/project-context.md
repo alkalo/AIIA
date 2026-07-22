@@ -1,9 +1,9 @@
 # AIIA Project Context
 
 ## Qué es AIIA
-Desktop Windows app con **AIIA Chat** (asistente local estilo ChatGPT) y hasta **5 agentes** de búsqueda/recopilación. Ollama + Playwright. Todo local, sin APIs de pago ni Google.
+Desktop Windows app con **AIIA Chat** (asistente estilo ChatGPT) y hasta **5 agentes** de búsqueda/recopilación. Ollama local por defecto; **Gemini opcional** con API key del usuario. Playwright para scraping. Datos siempre locales.
 
-Tagline: *Local AI chat & search agents* / *Chat e agentes de búsqueda con IA local*.
+Tagline: *Local-first AI chat & search agents* / *Chat e agentes de búsqueda con IA local-first*.
 
 ## Estructura del repo
 ```
@@ -36,16 +36,17 @@ npm run build:packages     # compilar packages TS
 - Max 5 agentes published
 - i18n UI: en, es; el chat responde en el idioma del mensaje
 - Chat: streaming, historial local, archivar/borrar, export Markdown, visión e imágenes locales
-- Modelo Ollama = el más potente que aguante el HW del usuario
-- Chat y runs de agentes pueden usar Ollama a la vez (sin cola global)
-- Fuera de alcance: plugins, GPT store, cloud (visión/imagen cloud)
+- Modelo Ollama = el más potente que aguante el HW del usuario (modo local)
+- Provider: `local` (default) | `gemini` (API key en Ajustes, DPAPI)
+- Chat y runs de agentes comparten el mismo provider; pueden solaparse
+- Fuera de alcance: plugins, GPT store, cloud sync de datos, visión/imagen cloud de terceros
 
 ## Para Cursor
 - Leer `docs/agent-spec-schema.md` antes de tocar agent-engine
 - Leer `docs/effort-levels.md` para params Ollama
 - Epic Chat: `docs/epics/README.md` → Epic 7
-- No añadir APIs de pago ni Google
-- Mantener todo en local
+- Gemini es opcional (key del usuario); no hay billing en AIIA
+- Mantener datos y credenciales en local
 
 ## Windows Defender y Ollama
 

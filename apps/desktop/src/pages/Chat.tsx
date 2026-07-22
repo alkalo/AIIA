@@ -11,9 +11,12 @@ import {
 } from "../api";
 import {
   formatOllamaError,
+  formatLlmError,
   isOllamaNotInstalledError,
   OLLAMA_DOWNLOAD_URL,
   plannerModelForProfile,
+  GEMINI_FLASH,
+  GEMINI_PRO,
 } from "../ollama-desktop";
 import { ChatMarkdown } from "../components/ChatMarkdown";
 import {
@@ -23,6 +26,7 @@ import {
   resolveChatMode,
   CHAT_MODE_STORAGE_KEY,
 } from "../chatModes";
+import type { AiProviderId } from "../api";
 import "./Chat.css";
 
 const TOOL_RE =
@@ -60,7 +64,7 @@ async function streamChat(
   messages: { role: string; content: string; images?: string[] }[],
   onDelta: (full: string) => void,
   onStreamId: (id: string) => void,
-  options?: { temperature?: number; numCtx?: number }
+  options?: { temperature?: number; numCtx?: number; provider?: string }
 ): Promise<string> {
   const streamId = crypto.randomUUID();
   onStreamId(streamId);
@@ -95,12 +99,13 @@ async function streamChat(
     })
       .then((fn) => {
         unlisten = fn;
-        return api.ollamaChatStream(
+        return api.llmChatStream(
           streamId,
           model,
           messages,
           options?.temperature ?? 0.7,
-          options?.numCtx ?? 8192
+          options?.numCtx ?? 8192,
+          options?.provider
         );
       })
       .catch((err) => finish(err instanceof Error ? err : new Error(String(err))));
@@ -134,7 +139,10 @@ export function Chat() {
   const [textModel, setTextModel] = useState("");
   const [chatMode, setChatMode] = useState<ChatModeId>(() => loadStoredChatMode());
   const [activeModeLabel, setActiveModeLabel] = useState("");
+  const [aiProvider, setAiProvider] = useState<AiProviderId>("local");
+  const [hasGeminiKey, setHasGeminiKey] = useState(false);
   const modeRef = useRef<ChatModeConfig>(resolveChatMode("auto", ""));
+  const providerRef = useRef<AiProviderId>("local");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -166,7 +174,21 @@ export function Chat() {
 
   const refreshOllama = useCallback(async () => {
     try {
-      const [hw, status] = await Promise.all([api.getHardwareInfo(), api.getOllamaStatus()]);
+      const [hw, status, providerStatus] = await Promise.all([
+        api.getHardwareInfo(),
+        api.getOllamaStatus(),
+        api.getAiProviderStatus(),
+      ]);
+      const provider: AiProviderId = providerStatus.provider === "gemini" ? "gemini" : "local";
+      setAiProvider(provider);
+      providerRef.current = provider;
+      setHasGeminiKey(providerStatus.hasGeminiKey);
+      if (provider === "gemini") {
+        setTextModel(GEMINI_FLASH);
+        setModel(GEMINI_FLASH);
+        setOllamaReady(true);
+        return;
+      }
       const recommended =
         status.recommendedModel || plannerModelForProfile(hw.profile);
       setTextModel(recommended);
@@ -178,6 +200,24 @@ export function Chat() {
       setTextModel((m) => m || "qwen2.5:7b");
     }
   }, []);
+
+  const setProvider = async (next: AiProviderId) => {
+    setError("");
+    if (next === "gemini" && !hasGeminiKey) {
+      setError(t("chat.geminiNeedKey"));
+      return;
+    }
+    try {
+      const s = await api.setAiProvider(next);
+      const provider: AiProviderId = s.provider === "gemini" ? "gemini" : "local";
+      setAiProvider(provider);
+      providerRef.current = provider;
+      setHasGeminiKey(s.hasGeminiKey);
+      await refreshOllama();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   useEffect(() => {
     refreshChats();
@@ -413,7 +453,8 @@ export function Chat() {
   const runToolLoop = async (
     firstText: string,
     history: { role: string; content: string }[],
-    chatId: string
+    chatId: string,
+    chatModel: string
   ): Promise<{ text: string; images: string[] }> => {
     let current = firstText;
     const convo = [...history];
@@ -463,13 +504,13 @@ export function Chat() {
       const system = await api.getChatSystemPrompt(mode.systemAddon);
       try {
         current = await streamChat(
-          model || textModel,
+          chatModel,
           [{ role: "system", content: system }, ...convo],
           updateStreaming,
           (id) => {
             activeStreamIdRef.current = id;
           },
-          { temperature: mode.temperature, numCtx: mode.numCtx }
+          { temperature: mode.temperature, numCtx: mode.numCtx, provider: providerRef.current }
         );
       } catch (e) {
         if (e instanceof StreamCancelledError) {
@@ -562,8 +603,14 @@ export function Chat() {
       }
 
       const useVision = imagePaths.length > 0;
+      const provider = providerRef.current;
       let chatModel = textModel || model || "qwen2.5:7b";
-      if (useVision) {
+      if (provider === "gemini") {
+        const resolvedMode = resolveChatMode(chatMode, messageText);
+        chatModel = resolvedMode.id === "pro" ? GEMINI_PRO : GEMINI_FLASH;
+        setModel(chatModel);
+        setTextModel(chatModel);
+      } else if (useVision) {
         const status = await api.getOllamaStatus();
         chatModel = await api.pickVisionModel(status.models, chatModel);
         setModel(chatModel);
@@ -640,10 +687,10 @@ export function Chat() {
           (id) => {
             activeStreamIdRef.current = id;
           },
-          { temperature: resolved.temperature, numCtx: resolved.numCtx }
+          { temperature: resolved.temperature, numCtx: resolved.numCtx, provider }
         );
         if (TOOL_RE.test(full)) {
-          const out = await runToolLoop(full, historyForTools, chatId);
+          const out = await runToolLoop(full, historyForTools, chatId, chatModel);
           finalText = out.text;
           assistantImages = out.images;
         } else {
@@ -682,9 +729,11 @@ export function Chat() {
       });
       await refreshChats();
     } catch (e) {
-      setError(formatOllamaError(e));
+      setError(formatLlmError(e, providerRef.current));
       setMessages((prev) => prev.filter((m) => !m.streaming));
-      setOllamaReady(false);
+      if (providerRef.current === "local") {
+        setOllamaReady(false);
+      }
       if (!userPersisted) {
         setInput(text);
         setPendingImages(attachments);
@@ -800,6 +849,20 @@ export function Chat() {
             )}
             <p className="chat-model">{model ? t("chat.model", { model }) : ""}</p>
             <label className="chat-mode-select">
+              <span>{t("chat.providerLabel")}</span>
+              <select
+                value={aiProvider}
+                disabled={sending}
+                onChange={(e) => void setProvider(e.target.value as AiProviderId)}
+                title={t("chat.providerHint")}
+              >
+                <option value="local">{t("chat.providerLocal")}</option>
+                <option value="gemini" disabled={!hasGeminiKey}>
+                  {t("chat.providerGemini")}
+                </option>
+              </select>
+            </label>
+            <label className="chat-mode-select">
               <span>{t("chat.modeLabel")}</span>
               <select
                 value={chatMode}
@@ -854,7 +917,7 @@ export function Chat() {
           )}
         </header>
 
-        {ollamaReady === false && (
+        {aiProvider === "local" && ollamaReady === false && (
           <div className="chat-ollama-banner">
             <p>{t("chat.ollamaDown")}</p>
             <div className="chat-ollama-actions">

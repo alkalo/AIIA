@@ -2,7 +2,10 @@ import { v4 as uuidv4 } from "uuid";
 import {
   OllamaClient,
   detectHardware,
+  geminiModelsForEffort,
+  GeminiClient,
   type EffortLevel,
+  type LlmClient,
 } from "@aiia/ollama-client";
 import { modelIsAvailable } from "@aiia/ollama-client/browser";
 import type { AgentSpec, TemplateId, PromptAttachment } from "./types.js";
@@ -14,15 +17,19 @@ import { buildContextBlock } from "./attachments.js";
 import { coerceJsonObject } from "./json-utils.js";
 
 export class PlannerAgent {
-  private ollama: OllamaClient;
+  private ollama: LlmClient;
   private plannerModel: string;
 
-  constructor(ollama?: OllamaClient) {
+  constructor(ollama?: LlmClient) {
     this.ollama = ollama ?? new OllamaClient();
     this.plannerModel = "qwen2.5:7b";
   }
 
   async init(): Promise<void> {
+    if (this.ollama instanceof GeminiClient) {
+      this.plannerModel = geminiModelsForEffort("medium").plannerModel;
+      return;
+    }
     const hw = await detectHardware();
     this.plannerModel = hw.plannerModel;
     const models = await this.ollama.listModels().catch(() => [] as string[]);

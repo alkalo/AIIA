@@ -11,7 +11,7 @@ import { ProgressBar } from "../components/ProgressBar";
 export function Dashboard() {
   const { t } = useTranslation();
   const { agents, loading, refresh } = useAgents();
-  const [agentLimits, setAgentLimits] = useState({ published: 0, max: 10 });
+  const [agentLimits, setAgentLimits] = useState({ published: 0, max: 5 });
   const [trackedAgentId, setTrackedAgentId] = useState<string | null>(null);
   const [showProgress, setShowProgress] = useState(false);
   const [runInProgress, setRunInProgress] = useState(false);

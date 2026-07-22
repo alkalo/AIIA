@@ -9,18 +9,22 @@ flowchart TB
     Core --> DB[(SQLite)]
     Core --> Scheduler[Scheduler]
     Core --> ChatSvc[Chat service]
-    ChatSvc --> OllamaChat[Ollama stream]
+    ChatSvc --> LlmRoute{ai_provider}
+    LlmRoute -->|local| OllamaChat[Ollama stream]
+    LlmRoute -->|gemini| GeminiChat[Gemini stream]
     ChatSvc --> Tools[chat-tools]
     Tools --> Scraper[scraper]
     Tools --> Engine[agent-engine Planner]
     Scheduler --> Runner[agent-runner Node]
     Runner --> Engine
     Runner --> Scraper
-    Runner --> Ollama[ollama-client]
-    Engine --> Ollama
+    Runner --> Llm[ollama-client LlmClient]
+    Engine --> Llm
     Scraper --> Web[Internet]
-    Ollama --> OllamaSrv[Ollama local]
+    Llm --> OllamaSrv[Ollama local]
+    Llm --> GeminiApi[Gemini API]
     OllamaChat --> OllamaSrv
+    GeminiChat --> GeminiApi
 ```
 
 ## Capas
@@ -34,7 +38,7 @@ flowchart TB
 | Agent runner | `packages/agent-runner` | Orquesta ejecución en Node |
 | Agent engine | `packages/agent-engine` | Planner, executor, effort, AgentSpec |
 | Scraper | `packages/scraper` | DuckDuckGo, Playwright |
-| Ollama client | `packages/ollama-client` | HW detect, chat, **chatStream**, model pull |
+| LLM client | `packages/ollama-client` | `LlmClient`: Ollama + Gemini, HW detect, model pull |
 
 ## Rutas UI
 
@@ -49,26 +53,27 @@ Sidebar estilo ChatGPT: historial de chats + enlaces a Agentes / Inbox / Runs / 
 
 ## Flujo AIIA Chat
 1. Usuario abre `/` → lista chats + hilo activo (o vacío)
-2. Mensaje (+ imágenes opcionales) → persistir → Ollama stream (texto o VL según adjuntos)
+2. Mensaje (+ imágenes opcionales) → persistir → `llm_chat_stream` (Ollama o Gemini según `ai_provider`)
 3. Tools locales: `web_search`, `fetch_url`, `create_agent`, `generate_image` (A1111), `run_python`
 4. Contexto largo → `chat_artifacts`; export Markdown bajo `chat-exports/`
 5. Archivar / borrar: soft archive o delete cascade
 
 ## Flujo de creación de agentes
-1. Usuario → prompt (UI create o bridge desde Chat) → PlannerAgent (Ollama) → AgentSpec
+1. Usuario → prompt (UI create o bridge desde Chat) → PlannerAgent (`LlmClient`) → AgentSpec
 2. Preview run (effort: low) → resultados muestra
 3. Usuario edita → pending_review → approve → published vN
 
 ## Flujo de ejecución de agentes
-1. Scheduler detecta agente due → spawn agent-runner
+1. Scheduler detecta agente due → spawn agent-runner con env `AIIA_LLM_PROVIDER` (+ key Gemini si aplica)
 2. Search → Extract → Filter → Dedupe → Store → Export
 3. Notificación + inbox update
-4. Puede solaparse con una sesión de Chat (sin mutex global de Ollama)
+4. Puede solaparse con una sesión de Chat (sin mutex global)
 
 ## Almacenamiento
 - SQLite en `%APPDATA%/AIIA/aiia.db`
 - Clave DB derivada + DPAPI
-- Credenciales: tabla `credentials` con blob cifrado
+- Credenciales de sitios + API key Gemini (`site_id=aiia.gemini`): tabla `credentials` con blob cifrado
+- Setting `ai_provider` = `local` | `gemini`
 - Chats: tablas `chats`, `chat_messages`, `chat_artifacts`
 - Artifacts de chat: ficheros bajo `%APPDATA%/AIIA/chat-artifacts/`
 

@@ -1,5 +1,4 @@
-import type { EffortLevel } from "@aiia/ollama-client";
-import type { OllamaClient } from "@aiia/ollama-client";
+import type { EffortLevel, LlmClient } from "@aiia/ollama-client";
 import type { AgentSpec, TemplateId } from "./types.js";
 import { isGrantTarget, isJobTarget, resolveOpportunitySubtype } from "./opportunity-subtype.js";
 import { resolveTemplateId } from "./templates.js";
@@ -110,7 +109,7 @@ export function buildQueriesFromPrompt(spec: AgentSpec): string[] {
 export async function replanSearchQueries(
   spec: AgentSpec,
   effort: EffortLevel,
-  ollama: OllamaClient,
+  ollama: LlmClient,
   plannerModel: string,
   cfgQueryExpansion: number
 ): Promise<string[]> {

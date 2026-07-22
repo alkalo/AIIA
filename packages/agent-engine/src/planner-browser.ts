@@ -3,7 +3,8 @@ import {
   OllamaClient,
   modelForProfile,
   modelIsAvailable,
-  type EffortLevel,
+  geminiModelsForEffort,
+  type LlmClient,
 } from "@aiia/ollama-client/browser";
 import type { AgentSpec, TemplateId, PromptAttachment } from "./types.js";
 import {
@@ -13,13 +14,7 @@ import {
 import { buildContextBlock } from "./attachments.js";
 import { coerceJsonObject } from "./json-utils.js";
 
-import type { ChatMessage, ChatOptions } from "@aiia/ollama-client/browser";
-
-export interface OllamaChatClient {
-  listModels(): Promise<string[]>;
-  pullModel(model: string, onProgress?: (status: string) => void): Promise<void>;
-  chat(messages: ChatMessage[], options: ChatOptions): Promise<string>;
-}
+export type OllamaChatClient = LlmClient;
 
 export class PlannerAgent {
   private ollama: OllamaChatClient;
@@ -32,6 +27,10 @@ export class PlannerAgent {
 
   async init(skipModelPull = false): Promise<void> {
     const models = await this.ollama.listModels().catch(() => [] as string[]);
+    if (models.some((m) => m.startsWith("gemini"))) {
+      this.plannerModel = geminiModelsForEffort("medium").plannerModel;
+      return;
+    }
     if (skipModelPull || modelIsAvailable(models, this.plannerModel)) {
       return;
     }

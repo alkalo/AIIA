@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use aiia_core::crypto::encrypt_string;
+use aiia_core::crypto::{decrypt_string, encrypt_string};
 use aiia_core::db::Database;
 use aiia_core::models::{
     AgentRecord, AgentSpec, AgentStatus, ChatArtifactRecord, ChatMessageRecord, ChatRecord,
@@ -20,6 +20,7 @@ use uuid::Uuid;
 mod ollama;
 mod updater;
 mod chat;
+mod gemini;
 
 pub struct AppState {
     pub db: Arc<Database>,
@@ -260,6 +261,222 @@ async fn ollama_chat_stream(
         cancel_set,
     )
     .await
+}
+
+fn read_ai_provider(db: &Database) -> gemini::AiProvider {
+    let raw = db.get_setting(gemini::AI_PROVIDER_SETTING).ok().flatten();
+    gemini::AiProvider::parse(raw.as_deref())
+}
+
+fn read_gemini_api_key(db: &Database) -> Result<Option<String>, String> {
+    let Some(record) = db
+        .get_credential_by_site_id(gemini::GEMINI_SITE_ID)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+    let plain = decrypt_string(&record.encrypted_data).map_err(|e| e.to_string())?;
+    let trimmed = plain.trim().to_string();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed))
+    }
+}
+
+fn llm_env_for_runner(db: &Database) -> Result<Vec<(String, String)>, String> {
+    let provider = read_ai_provider(db);
+    let mut env = vec![("AIIA_LLM_PROVIDER".to_string(), provider.as_str().to_string())];
+    if provider == gemini::AiProvider::Gemini {
+        let key = read_gemini_api_key(db)?
+            .ok_or_else(|| {
+                "Gemini seleccionado pero no hay API key. Configúrala en Ajustes.".to_string()
+            })?;
+        env.push(("AIIA_GEMINI_API_KEY".to_string(), key));
+    }
+    Ok(env)
+}
+
+#[tauri::command]
+fn get_ai_provider_status(state: State<'_, AppState>) -> Result<gemini::AiProviderStatus, String> {
+    let provider = read_ai_provider(&state.db);
+    let has_gemini_key = read_gemini_api_key(&state.db)?.is_some();
+    Ok(gemini::AiProviderStatus {
+        provider: provider.as_str().to_string(),
+        has_gemini_key,
+    })
+}
+
+#[tauri::command]
+fn set_ai_provider(state: State<'_, AppState>, provider: String) -> Result<gemini::AiProviderStatus, String> {
+    let parsed = gemini::AiProvider::parse(Some(&provider));
+    if parsed == gemini::AiProvider::Gemini && read_gemini_api_key(&state.db)?.is_none() {
+        return Err(
+            "Configura primero la API key de Gemini en Ajustes antes de activar este modo."
+                .to_string(),
+        );
+    }
+    state
+        .db
+        .set_setting(gemini::AI_PROVIDER_SETTING, parsed.as_str())
+        .map_err(|e| e.to_string())?;
+    Ok(gemini::AiProviderStatus {
+        provider: parsed.as_str().to_string(),
+        has_gemini_key: read_gemini_api_key(&state.db)?.is_some(),
+    })
+}
+
+#[tauri::command]
+fn set_gemini_api_key(state: State<'_, AppState>, api_key: String) -> Result<gemini::AiProviderStatus, String> {
+    let trimmed = api_key.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("La API key no puede estar vacía".to_string());
+    }
+    let encrypted = encrypt_string(&trimmed).map_err(|e| e.to_string())?;
+    state
+        .db
+        .upsert_credential(gemini::GEMINI_SITE_ID, "Gemini API key", &encrypted, None, false)
+        .map_err(|e| e.to_string())?;
+    let provider = read_ai_provider(&state.db);
+    Ok(gemini::AiProviderStatus {
+        provider: provider.as_str().to_string(),
+        has_gemini_key: true,
+    })
+}
+
+#[tauri::command]
+fn clear_gemini_api_key(state: State<'_, AppState>) -> Result<gemini::AiProviderStatus, String> {
+    let _ = state
+        .db
+        .delete_credential_by_site_id(gemini::GEMINI_SITE_ID)
+        .map_err(|e| e.to_string())?;
+    // Fall back to local if Gemini was selected.
+    if read_ai_provider(&state.db) == gemini::AiProvider::Gemini {
+        state
+            .db
+            .set_setting(gemini::AI_PROVIDER_SETTING, gemini::AiProvider::Local.as_str())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(gemini::AiProviderStatus {
+        provider: gemini::AiProvider::Local.as_str().to_string(),
+        has_gemini_key: false,
+    })
+}
+
+#[tauri::command]
+async fn test_gemini_api_key(
+    state: State<'_, AppState>,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    let key = match api_key {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => read_gemini_api_key(&state.db)?
+            .ok_or_else(|| "No hay API key de Gemini guardada".to_string())?,
+    };
+    gemini::test_gemini_api_key(&key).await
+}
+
+#[tauri::command]
+async fn llm_chat(
+    state: State<'_, AppState>,
+    model: String,
+    messages: Vec<serde_json::Value>,
+    temperature: Option<f64>,
+    num_ctx: Option<u32>,
+    format: Option<String>,
+    provider: Option<String>,
+) -> Result<String, String> {
+    let resolved = provider
+        .as_deref()
+        .map(|p| gemini::AiProvider::parse(Some(p)))
+        .unwrap_or_else(|| read_ai_provider(&state.db));
+    match resolved {
+        gemini::AiProvider::Local => {
+            ollama::ollama_chat(model, messages, temperature, num_ctx, format).await
+        }
+        gemini::AiProvider::Gemini => {
+            let key = read_gemini_api_key(&state.db)?.ok_or_else(|| {
+                "Gemini seleccionado pero no hay API key. Configúrala en Ajustes.".to_string()
+            })?;
+            let gemini_model = if model.starts_with("gemini") {
+                model
+            } else {
+                gemini::gemini_model_for_mode("eficaz").to_string()
+            };
+            gemini::gemini_chat(&key, gemini_model, messages, temperature, format).await
+        }
+    }
+}
+
+#[tauri::command]
+async fn llm_chat_stream(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    stream_id: String,
+    model: String,
+    messages: Vec<serde_json::Value>,
+    temperature: Option<f64>,
+    num_ctx: Option<u32>,
+    provider: Option<String>,
+) -> Result<(), String> {
+    let cancel_set = state.cancelled_chat_streams.clone();
+    {
+        let mut set = cancel_set.lock().map_err(|e| e.to_string())?;
+        set.remove(&stream_id);
+    }
+    let resolved = provider
+        .as_deref()
+        .map(|p| gemini::AiProvider::parse(Some(p)))
+        .unwrap_or_else(|| read_ai_provider(&state.db));
+    match resolved {
+        gemini::AiProvider::Local => {
+            ollama::ollama_chat_stream(
+                app,
+                stream_id,
+                model,
+                messages,
+                temperature,
+                num_ctx,
+                cancel_set,
+            )
+            .await
+        }
+        gemini::AiProvider::Gemini => {
+            let key = match read_gemini_api_key(&state.db)? {
+                Some(k) => k,
+                None => {
+                    let err =
+                        "Gemini seleccionado pero no hay API key. Configúrala en Ajustes.".to_string();
+                    let _ = app.emit(
+                        "chat-stream",
+                        ollama::ChatStreamEvent {
+                            stream_id: stream_id.clone(),
+                            delta: String::new(),
+                            done: true,
+                            cancelled: false,
+                            error: Some(err.clone()),
+                        },
+                    );
+                    return Err(err);
+                }
+            };
+            let gemini_model = if model.starts_with("gemini") {
+                model
+            } else {
+                gemini::gemini_model_for_mode("eficaz").to_string()
+            };
+            gemini::gemini_chat_stream(
+                app,
+                key,
+                stream_id,
+                gemini_model,
+                messages,
+                temperature,
+                cancel_set,
+            )
+            .await
+        }
+    }
 }
 
 #[tauri::command]
@@ -841,6 +1058,7 @@ fn list_credentials(state: State<AppState>) -> Result<Vec<CredentialSummary>, St
     let creds = state.db.list_credentials().map_err(|e| e.to_string())?;
     Ok(creds
         .into_iter()
+        .filter(|c| c.site_id != gemini::GEMINI_SITE_ID)
         .map(|c| CredentialSummary {
             id: c.id,
             site_id: c.site_id,
@@ -1290,6 +1508,36 @@ fn spawn_agent_run_worker(
             );
         };
 
+        let llm_env = match llm_env_for_runner(&db) {
+            Ok(env) => env,
+            Err(err) => {
+                let _ = db.save_run_log(&RunLog {
+                    id: run_id.clone(),
+                    agent_id: agent_id.clone(),
+                    effort: parse_effort_level(&effort),
+                    phase: "error".to_string(),
+                    status: "failed".to_string(),
+                    summary: err.clone(),
+                    results_count: 0,
+                    started_at: chrono::Utc::now(),
+                    finished_at: Some(chrono::Utc::now()),
+                });
+                let _ = app.emit(
+                    "agent-run-finished",
+                    serde_json::json!({
+                        "agentId": agent_id,
+                        "runId": run_id,
+                        "success": false,
+                        "error": err,
+                    }),
+                );
+                finish();
+                return;
+            }
+        };
+        let env_refs: Vec<(&str, String)> =
+            llm_env.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+
         match spawn_agent_runner(
             &runner_path,
             &runner_spawn,
@@ -1297,6 +1545,7 @@ fn spawn_agent_run_worker(
             &effort,
             &data_dir,
             &run_id,
+            &env_refs,
         ) {
             Ok(child) => {
                 let pid = child.id();
@@ -2419,7 +2668,14 @@ pub fn run() {
             ensure_ollama_model,
             ollama_chat,
             ollama_chat_stream,
+            llm_chat,
+            llm_chat_stream,
             cancel_chat_stream,
+            get_ai_provider_status,
+            set_ai_provider,
+            set_gemini_api_key,
+            clear_gemini_api_key,
+            test_gemini_api_key,
             create_chat,
             list_chats,
             get_chat,

@@ -221,7 +221,7 @@ pub struct CredentialRecord {
     pub has_session: bool,
 }
 
-pub const MAX_PUBLISHED_AGENTS: usize = 10;
+pub const MAX_PUBLISHED_AGENTS: usize = 5;
 
 /// Soft limit for in-thread chat context before older turns become artifacts.
 pub const CHAT_CONTEXT_CHAR_LIMIT: usize = 100_000;

@@ -620,6 +620,36 @@ impl Database {
         Ok(site_id)
     }
 
+    pub fn get_credential_by_site_id(&self, site_id: &str) -> Result<Option<CredentialRecord>> {
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        conn.query_row(
+            "SELECT id, site_id, label, encrypted_data, created_at, login_url, has_session FROM credentials WHERE site_id = ?1",
+            params![site_id],
+            |row| {
+                Ok(CredentialRecord {
+                    id: row.get(0)?,
+                    site_id: row.get(1)?,
+                    label: row.get(2)?,
+                    encrypted_data: row.get(3)?,
+                    created_at: row.get::<_, String>(4)?.parse().unwrap_or_else(|_| Utc::now()),
+                    login_url: row.get(5)?,
+                    has_session: row.get::<_, i32>(6)? != 0,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn delete_credential_by_site_id(&self, site_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        let n = conn.execute(
+            "DELETE FROM credentials WHERE site_id = ?1",
+            params![site_id],
+        )?;
+        Ok(n > 0)
+    }
+
     pub fn list_credentials(&self) -> Result<Vec<CredentialRecord>> {
         let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
         let mut stmt = conn.prepare(

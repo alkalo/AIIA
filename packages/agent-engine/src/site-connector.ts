@@ -1,10 +1,11 @@
-import { OllamaClient, modelForProfile, type ChatMessage, type ChatOptions } from "@aiia/ollama-client/browser";
+import {
+  OllamaClient,
+  modelForProfile,
+  GEMINI_FLASH,
+  type LlmClient,
+} from "@aiia/ollama-client/browser";
 
-export interface OllamaChatClient {
-  listModels(): Promise<string[]>;
-  pullModel(model: string, onProgress?: (status: string) => void): Promise<void>;
-  chat(messages: ChatMessage[], options: ChatOptions): Promise<string>;
-}
+export type OllamaChatClient = LlmClient;
 
 export interface SiteConnectionPlan {
   siteId: string;
@@ -38,7 +39,9 @@ export class SiteConnectorAgent {
 
   async analyzeSite(siteName: string, lang: "en" | "es" = "es"): Promise<SiteConnectionPlan> {
     const models = await this.ollama.listModels().catch(() => [] as string[]);
-    if (!models.some((m) => m.startsWith(this.model.split(":")[0]))) {
+    if (models.some((m) => m.startsWith("gemini"))) {
+      this.model = GEMINI_FLASH;
+    } else if (!models.some((m) => m.startsWith(this.model.split(":")[0]))) {
       await this.ollama.pullModel(this.model);
     }
 

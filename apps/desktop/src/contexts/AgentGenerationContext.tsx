@@ -19,7 +19,8 @@ import {
 } from "@aiia/agent-engine/browser";
 import { api, type OllamaSetupProgress } from "../api";
 import {
-  DesktopOllamaClient,
+  DesktopLlmClient,
+  formatLlmError,
   formatOllamaError,
   isOllamaNotInstalledError,
   prepareOllamaForPlanner,
@@ -93,15 +94,24 @@ export function AgentGenerationProvider({ children }: { children: ReactNode }) {
       setError("");
       setOllamaNeedsInstall(false);
       setGeneratedSpec(null);
-      setOllamaSetup({ message: t("create.ollamaPreparing"), percent: 0 });
 
       const task = (async () => {
         try {
+          const providerStatus = await api.getAiProviderStatus();
+          const usingGemini = providerStatus.provider === "gemini";
+          setOllamaSetup({
+            message: usingGemini ? t("create.llmPreparing") : t("create.ollamaPreparing"),
+            percent: 0,
+          });
+
           const hw = await api.getHardwareInfo();
           await prepareOllamaForPlanner(hw.profile);
 
-          setOllamaSetup({ message: t("create.ollamaGenerating"), percent: 100 });
-          const planner = new PlannerAgent(new DesktopOllamaClient(), hw.profile);
+          setOllamaSetup({
+            message: usingGemini ? t("create.llmGenerating") : t("create.ollamaGenerating"),
+            percent: 100,
+          });
+          const planner = new PlannerAgent(new DesktopLlmClient(), hw.profile);
           const generated = await planner.plan(
             params.prompt,
             params.templateId,
@@ -121,7 +131,11 @@ export function AgentGenerationProvider({ children }: { children: ReactNode }) {
             setOllamaNeedsInstall(true);
             setError(t("create.ollamaNotInstalled"));
           } else {
-            setError(formatOllamaError(e));
+            const status = await api.getAiProviderStatus().catch(() => null);
+            setError(
+              formatLlmError(e, status?.provider === "gemini" ? "gemini" : "local") ||
+                formatOllamaError(e)
+            );
           }
           return null;
         } finally {

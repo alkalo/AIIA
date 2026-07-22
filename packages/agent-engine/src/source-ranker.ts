@@ -1,4 +1,4 @@
-import type { OllamaClient, ResearchProfile } from "@aiia/ollama-client";
+import type { LlmClient, ResearchProfile } from "@aiia/ollama-client";
 import type { AgentSpec, SearchResult } from "./types.js";
 import { rankSearchResults, type SearchHit } from "./search-quality.js";
 import { coerceJsonArray } from "./json-utils.js";
@@ -25,7 +25,7 @@ export async function rankSources(
   spec: AgentSpec,
   profile: ResearchProfile,
   limit: number,
-  ollama: OllamaClient,
+  ollama: LlmClient,
   plannerModel: string,
   numCtx: number
 ): Promise<RankedSource[]> {
