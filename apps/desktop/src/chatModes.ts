@@ -465,11 +465,30 @@ export function composeRealEstatePortalAnswer(
   query: string,
   intro: string,
   hint: string,
-  limit = 12
+  extraHits: { title: string; url: string; snippet: string }[] = [],
+  limit = 14
 ): string {
-  const seeds = realEstatePortalSeeds(query).slice(0, limit);
+  const hits = preferPortalUrls(mergeRealEstatePortalSeeds(extraHits, query)).slice(0, limit);
+  const seeds = hits.length ? hits : realEstatePortalSeeds(query).slice(0, limit);
   const block = seeds.map((h, i) => `${i + 1}. ${h.title} — ${h.url}`).join("\n");
   return [intro, "", block, "", hint].join("\n");
+}
+
+/** Merge Idealista/Fotocasa seeds into SERP hits (deduped by URL). */
+export function mergeRealEstatePortalSeeds(
+  hits: { title: string; url: string; snippet: string }[],
+  query: string
+): { title: string; url: string; snippet: string }[] {
+  if (!query.trim() || !isRealEstateListingSearch(query)) return hits;
+  const out = [...hits];
+  const seen = new Set(out.map((h) => h.url.toLowerCase()));
+  for (const s of realEstatePortalSeeds(query)) {
+    const key = s.url.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
 }
 
 /** Merge portal seeds into a hit list (deduped by URL). */
@@ -511,7 +530,7 @@ export function composeJobPortalAnswer(
 
 function preferPortalUrls<T extends { url: string }>(hits: T[]): T[] {
   const score = (u: string) =>
-    /hitmarker\.net|remotegamejobs\.com|gamesjobsdirect\.com|workwithindies\.com|linkedin\.com\/jobs|infojobs\.net|indeed\.com|remoteok\.com|weworkremotely\.com|jooble\.org|tecnoempleo\.com|glassdoor\.com/i.test(
+    /hitmarker\.net|remotegamejobs\.com|gamesjobsdirect\.com|workwithindies\.com|linkedin\.com\/jobs|infojobs\.net|indeed\.com|remoteok\.com|weworkremotely\.com|jooble\.org|tecnoempleo\.com|glassdoor\.com|idealista\.com|fotocasa\.es|habitaclia\.com|milanuncios\.com|pisos\.com|yaencontre\.com/i.test(
       u
     )
       ? 0

@@ -1,6 +1,7 @@
 import type { AgentSpec, EffortLevel, OpportunitySubtype } from "./types.js";
 import {
   defaultDedupeFields,
+  isGrantTarget,
   isRealEstateTarget,
   resolveOpportunitySubtype,
 } from "./opportunity-subtype.js";
@@ -60,6 +61,9 @@ export function normalizeAgentSpec(spec: Partial<AgentSpec> & { id: string }): A
     // Property searches need deep portal coverage — never leave medium/high + thin link caps.
     effort = atLeastEffort(effort, "super_high");
     if (maxSources == null || maxSources < 120) maxSources = Math.max(maxSources ?? 0, 120);
+  } else if (isGrantTarget(draft) || opportunitySubtype === "grants") {
+    effort = atLeastEffort(effort, "super_high");
+    if (maxSources == null || maxSources < 100) maxSources = Math.max(maxSources ?? 0, 100);
   }
 
   return {

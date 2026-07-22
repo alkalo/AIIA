@@ -41,7 +41,20 @@ export function resolveSearchLimits(spec: AgentSpec, effort: EffortLevel): Searc
       ? Math.max(1, configuredPerQuery)
       : cfg.maxResultsPerQuery;
 
-  return { maxSources, maxResultsPerQuery, fromAgentConfig };
+  // Deep research: never starve per-query depth when maxSources was floored up.
+  const deep = isRealEstateTarget(spec) || isGrantTarget(spec);
+  const perQueryFloor =
+    deep && effort !== "low"
+      ? effort === "ultra_high"
+        ? 20
+        : effort === "super_high"
+          ? 16
+          : 12
+      : 0;
+  const resolvedPerQuery =
+    perQueryFloor > 0 ? Math.max(maxResultsPerQuery, perQueryFloor) : maxResultsPerQuery;
+
+  return { maxSources, maxResultsPerQuery: resolvedPerQuery, fromAgentConfig };
 }
 
 /** Resultados a pedir por consulta para poder alcanzar maxSources con N consultas. */

@@ -16,7 +16,7 @@ Parámetros canónicos: `packages/ollama-client/src/index.ts` (`EFFORT_CONFIGS`)
 
 Gemini: `medium`/`eficaz`+ → **Pro** plan+extract+critic; Flash solo en Instant/`low` extract.
 
-Inmobiliario / grants: `normalizeAgentSpec` fuerza ≥ `super_high` y ≥ 120 fuentes; `resolveSearchLimits` aplica suelo adicional (hasta 200 en ultra).
+Inmobiliario / grants: `normalizeAgentSpec` fuerza ≥ `super_high` y ≥ 120/100 fuentes; ranking prioriza Idealista/Fotocasa y penaliza job boards en búsquedas de casas.
 
 ## Chat modes
 

@@ -1,6 +1,6 @@
 import type { AgentSpec, ExtractedItem } from "./types.js";
 import type { EffortConfig, EffortLevel } from "@aiia/ollama-client";
-import { isGrantTarget, isJobTarget } from "./opportunity-subtype.js";
+import { isGrantTarget, isJobTarget, isRealEstateTarget } from "./opportunity-subtype.js";
 
 export interface SearchHit {
   title: string;
@@ -46,10 +46,20 @@ const LOW_QUALITY_PATTERNS = [
   /indeed\.com\/cmp\//i,
 ];
 
-export function domainQualityScore(url: string): number {
+export function domainQualityScore(url: string, spec?: AgentSpec): number {
   try {
     const host = new URL(url).hostname.toLowerCase();
     if (LOW_QUALITY_PATTERNS.some((p) => p.test(url))) return -15;
+    // Property searches: portals first; job boards are noise.
+    if (spec && isRealEstateTarget(spec)) {
+      if (/idealista\.com|fotocasa\.es|habitaclia\.com|milanuncios\.com|pisos\.com|yaencontre\.com/i.test(host)) {
+        const path = new URL(url).pathname.replace(/\/$/, "") || "/";
+        if (path === "/" || path === "") return 5;
+        if (/\/(venta|comprar|inmueble|piso|casa|chalet|obra-nueva)/i.test(path)) return 28;
+        return 18;
+      }
+      if (JOB_BOARD_PATTERNS.some((p) => p.test(url))) return -30;
+    }
     if (QUALITY_DOMAIN_PATTERNS.some((p) => p.test(host) || p.test(url))) return 20;
     if (host.endsWith(".gov") || host.endsWith(".edu")) return 15;
     return 0;
@@ -164,12 +174,40 @@ export function grantTargetAdjustment(url: string, contentBlob: string, spec: Ag
   return adj;
 }
 
+/** Ajuste de puntuación para listados inmobiliarios. */
+export function realEstateTargetAdjustment(url: string, contentBlob: string, spec: AgentSpec): number {
+  if (!isRealEstateTarget(spec)) return 0;
+  if (/portal seed/i.test(contentBlob)) return 20;
+  let adj = 0;
+  const hay = contentBlob.toLowerCase();
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/$/, "") || "/";
+    if (path === "/" || path === "") adj -= 40;
+    if (/idealista\.com|fotocasa\.es|habitaclia\.com|milanuncios\.com|pisos\.com|yaencontre\.com/i.test(u.hostname)) {
+      adj += 18;
+      if (/\/(inmueble|piso|casa|chalet|obra-nueva|venta-viviendas\/[^/]+)/i.test(path)) adj += 22;
+    }
+  } catch {
+    /* ignore */
+  }
+  if (JOB_BOARD_PATTERNS.some((p) => p.test(url))) adj -= 40;
+  if (/\b(job posting|empleo|vacante|hiring|oferta de trabajo)\b/i.test(hay)) adj -= 35;
+  if (/\b(€|euros?|precio|m²|m2|habitaciones?|reforma|rehabilit)\b/i.test(hay)) adj += 15;
+  if (/\b(receta|recipe|mexicana|dictionary|wikipedia)\b/i.test(hay)) adj -= 40;
+  return adj;
+}
+
 export function opportunityTargetAdjustment(
   url: string,
   contentBlob: string,
   spec: AgentSpec
 ): number {
-  return jobTargetAdjustment(url, contentBlob, spec) + grantTargetAdjustment(url, contentBlob, spec);
+  return (
+    jobTargetAdjustment(url, contentBlob, spec) +
+    grantTargetAdjustment(url, contentBlob, spec) +
+    realEstateTargetAdjustment(url, contentBlob, spec)
+  );
 }
 
 const STOP_WORDS = new Set([
@@ -207,7 +245,7 @@ export function rankSearchResults(
 ): SearchHit[] {
   const scored = results.map((r) => {
     const blob = `${r.title} ${r.snippet} ${r.url}`;
-    let score = 50 + domainQualityScore(r.url) + keywordOverlapScore(blob, spec);
+    let score = 50 + domainQualityScore(r.url, spec) + keywordOverlapScore(blob, spec);
     score += opportunityTargetAdjustment(r.url, blob, spec);
     if (r.title.length > 10) score += 5;
     if (r.snippet.length > 40) score += 5;
@@ -228,7 +266,7 @@ export function heuristicItemScore(
   spec: AgentSpec
 ): number {
   const blob = `${item.title ?? ""} ${item.description ?? ""} ${source.title} ${source.snippet} ${source.url}`;
-  let score = 55 + keywordOverlapScore(blob, spec) + domainQualityScore(source.url);
+  let score = 55 + keywordOverlapScore(blob, spec) + domainQualityScore(source.url, spec);
   score += opportunityTargetAdjustment(String(item.url ?? source.url), blob, spec);
   if (item.url) score += 5;
   if (item.title && String(item.title).length > 3) score += 5;
@@ -253,6 +291,12 @@ export function broadenQueries(queries: string[], prompt: string, spec?: AgentSp
       out.add(`${promptWords} convocatoria abierta`);
       out.add(`site:fundsforngos.org ${promptWords}`);
       out.add(`site:ec.europa.eu ${promptWords} funding`);
+    } else if (spec && isRealEstateTarget(spec)) {
+      out.add(`${promptWords} site:idealista.com`);
+      out.add(`${promptWords} site:fotocasa.es`);
+      out.add(`${promptWords} a reformar OR oportunidad`);
+      const short = tokenize(prompt).slice(0, 6).join(" ");
+      if (short) out.add(`site:habitaclia.com ${short}`);
     } else if (!spec || isJobTarget(spec)) {
       out.add(`${promptWords} empleo OR jobs`);
       const short = tokenize(prompt).slice(0, 6).join(" ");

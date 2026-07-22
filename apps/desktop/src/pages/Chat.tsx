@@ -37,7 +37,7 @@ import {
   mergeJobPortalSeeds,
   composeJobPortalAnswer,
   composeRealEstatePortalAnswer,
-  realEstatePortalSeeds,
+  mergeRealEstatePortalSeeds,
   CHAT_MODE_STORAGE_KEY,
 } from "../chatModes";
 import type { AiProviderId } from "../api";
@@ -950,12 +950,30 @@ If this is a job board, present the URL to the user anyway. Do not say there are
           { id: "streaming", role: "assistant", content: "", streaming: true },
         ]);
         setToolStatus(t("chat.toolSearch"));
+        let extraHits: { title: string; url: string; snippet: string }[] = [];
+        try {
+          const depth = resolved.searchDepth === "instant" ? "eficaz" : resolved.searchDepth;
+          extraHits = await api.chatWebSearch(
+            messageText,
+            Math.min(resolved.searchLimit, 24),
+            depth === "max" ? "max" : depth
+          );
+        } catch {
+          extraHits = [];
+        }
+        if (stopRequestedRef.current) {
+          setMessages((prev) => prev.filter((m) => !m.streaming));
+          return;
+        }
         const finalText = composeRealEstatePortalAnswer(
           messageText,
           t("chat.emptyMarketFallback"),
-          t("chat.emptyMarketHint")
+          t("chat.emptyMarketHint"),
+          extraHits
         );
-        lastSearchHitsRef.current = preferPortalHits(realEstatePortalSeeds(messageText));
+        lastSearchHitsRef.current = preferPortalHits(
+          mergeRealEstatePortalSeeds(extraHits, messageText)
+        );
         updateStreaming(finalText);
         const saved = await api.addChatMessage(chatId, "assistant", finalText);
         setMessages((prev) => {

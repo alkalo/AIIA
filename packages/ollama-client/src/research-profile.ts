@@ -155,7 +155,7 @@ export function resolveModels(hw: HardwareInfo, effort: EffortLevel): ResolvedMo
     case "medium":
       return {
         plannerModel: modelAt(best),
-        extractorModel: modelAt(lighter),
+        extractorModel: modelAt(best),
         criticModel: modelAt(best),
       };
     default:

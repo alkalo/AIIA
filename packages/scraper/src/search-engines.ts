@@ -661,7 +661,8 @@ export function enginesForEffort(
     case "super_high":
       return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "brave", "ecosia", "bing"];
     case "ultra_high":
-      return ["mojeek", "duckduckgo-html", "duckduckgo-lite", "brave", "ecosia", "bing"];
+      // Same engines as super, but Brave/Ecosia earlier for diversity when Mojeek fills first.
+      return ["brave", "ecosia", "mojeek", "duckduckgo-html", "duckduckgo-lite", "bing"];
   }
 }
 
@@ -690,9 +691,11 @@ export async function searchWeb(
   let attempted = 0;
   let hardBlockFails = 0;
 
-  // Secuencial con parada temprana: evita rate limits por ráfagas paralelas.
+  // Secuencial: en high+ no cortar al primer motor que llena el cupo — diversificar.
+  const minEnginesBeforeFill =
+    engines.length >= 5 ? 3 : engines.length >= 4 ? 2 : 1;
   for (const engineId of ordered) {
-    if (merged.length >= maxResults) break;
+    if (merged.length >= maxResults && attempted >= minEnginesBeforeFill) break;
     if (isEngineCooling(engineId)) {
       errors.push({
         engine: engineId,
@@ -701,7 +704,7 @@ export async function searchWeb(
       continue;
     }
     attempted += 1;
-    const need = maxResults - merged.length;
+    const need = Math.max(3, maxResults - merged.length);
     const outcome = await runEngine(engineId, query, need, locale);
     counts[engineId] = (counts[engineId] ?? 0) + outcome.results.length;
     if (outcome.results.length > 0) {

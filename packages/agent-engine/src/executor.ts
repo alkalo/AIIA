@@ -50,6 +50,26 @@ import {
   type ActionLogger,
 } from "./run-logger.js";
 import { coerceJsonArray, coerceJsonObject } from "./json-utils.js";
+
+/** Prefer content window around price/m² markers on property pages (chrome-heavy portals). */
+function sliceContentForExtract(
+  content: string,
+  maxChars: number,
+  _url: string,
+  spec: AgentSpec
+): string {
+  if (content.length <= maxChars) return content;
+  if (!isRealEstateTarget(spec) && !isGrantTarget(spec)) {
+    return content.slice(0, maxChars);
+  }
+  const markers =
+    /€|euros?|precio|m²|m2|habitaciones?|deadline|convocatoria|funding|subvenci/i;
+  const idx = content.search(markers);
+  if (idx < 0) return content.slice(0, maxChars);
+  const half = Math.floor(maxChars / 2);
+  const start = Math.max(0, idx - half);
+  return content.slice(start, start + maxChars);
+}
 import {
   normalizeExtractedItem,
   validateOpportunityResult,
@@ -151,9 +171,14 @@ function shouldStopForEmptyWaves(
   serpExhausted = false,
   emptySerpWaves = 0
 ): boolean {
-  // SERP engines rate-limited/captcha'd — stop hammering queries immediately.
-  // If we already have portal seeds / prior hits, ending SERP is fine (coverage continues via fetch).
-  if (serpExhausted) return true;
+  // SERP blocked: stop hammering queries ONLY when we have zero coverage.
+  // With portal seeds / prior hits, end SERP waves but allow the loop to exit
+  // via emptyWaves — caller still proceeds to fetch/extract.
+  if (serpExhausted && rankedCount === 0) return true;
+  if (serpExhausted && rankedCount > 0) {
+    // Soft exit after a couple of empty SERP waves once seeds exist.
+    return emptySerpWaves >= (longMode ? 4 : 2);
+  }
   // Soft-dead SERP: allow more empty waves when we already have seeded coverage.
   const softDeadThreshold = rankedCount > 0 ? (longMode ? 8 : 3) : longMode ? 5 : 2;
   if (emptySerpWaves >= softDeadThreshold) return true;
@@ -827,12 +852,15 @@ export class Executor {
     let filtered = await this.filterItems(extracted, spec, cfg, rankedSources);
 
     if (profile.useCritic && this.criticModel && filtered.length > 0) {
+      const deepTarget =
+        isRealEstateTarget(spec) || isGrantTarget(spec) || isJobTarget(spec);
       const allHeuristic = filtered.every(
         (i) =>
           !i.reason ||
           /heuristic|serp fallback|extracted/i.test(String(i.reason))
       );
-      if (allHeuristic && filtered.length <= 5) {
+      // Never skip critic on deep opportunity runs — heuristic seeds need LLM re-score.
+      if (!deepTarget && allHeuristic && filtered.length <= 5) {
         log(
           LogAction.INFO,
           "Revisión Pro omitida — resultados heurísticos/SERP",
@@ -1361,7 +1389,7 @@ export class Executor {
     cfg: EffortConfig
   ): Promise<ExtractedItem> {
     const schema = spec.output.schema;
-    const truncated = content.slice(0, cfg.extractContentChars);
+    const truncated = sliceContentForExtract(content, cfg.extractContentChars, result.url, spec);
     const grant = isGrantTarget(spec);
     const realEstate = isRealEstateTarget(spec);
     const systemPrompt = grant

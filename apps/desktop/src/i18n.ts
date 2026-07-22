@@ -105,7 +105,7 @@ const resources = {
           instant: "Seconds: fast answers, almost no web",
           eficaz: "Solid search + reading key pages (budget ~5–20 min)",
           pro: "Deep research: multi-engine, many queries, read sources (budget ~30–75 min)",
-          max: "Maximum search power: multi-wave research (hard ceiling 3 h)",
+          max: "Maximum search power: multi-wave research (hard ceiling 4 h)",
         },
       },
       dashboard: {
@@ -549,7 +549,7 @@ const resources = {
           instant: "Segundos: respuestas rápidas, casi sin web",
           eficaz: "Búsqueda sólida + lectura de páginas clave (presupuesto ~5–20 min)",
           pro: "Investigación profunda: multi-motor, muchas consultas, lee fuentes (presupuesto ~30–75 min)",
-          max: "Máxima potencia de búsqueda: investigación multi-ola (tope duro 3 h)",
+          max: "Máxima potencia de búsqueda: investigación multi-ola (tope duro 4 h)",
         },
       },
       dashboard: {

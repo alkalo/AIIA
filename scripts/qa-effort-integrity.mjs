@@ -35,6 +35,8 @@ if (defaultLlmTimeoutMs(GEMINI_PRO) !== 480000) bugs.push("pro timeout");
 if (!String(GEMINI_FLASH).includes("3.6")) bugs.push("flash model id");
 if (!String(GEMINI_PRO).includes("3.1-pro")) bugs.push("pro model id");
 if (!chat.includes("hard ceiling 4 hours")) bugs.push("chat max text 4h");
+if (!i18n.includes("hard ceiling 4 h")) bugs.push("i18n en 4h");
+if (!i18n.includes("tope duro 4 h")) bugs.push("i18n es 4h");
 if (RESEARCH_PROFILES.ultra_high.searchWaves < 48) bugs.push("ultra waves");
 
 console.log(bugs.length ? `BUGS: ${bugs.join("; ")}` : "NO_BUGS_FOUND");
