@@ -15,12 +15,21 @@ export const REAL_ESTATE_ALLOWED_HOSTS = [
   "enalquiler.com",
 ] as const;
 
-const ZONE_DEFS: { match: RegExp; label: string; idealistaSlug: string; provinceHint: string }[] = [
-  { match: /alt\s*camp/i, label: "Alt Camp", idealistaSlug: "alt-camp-tarragona", provinceHint: "tarragona" },
-  { match: /baix\s*camp/i, label: "Baix Camp", idealistaSlug: "baix-camp-tarragona", provinceHint: "tarragona" },
-  { match: /alt\s*pened[eè]s/i, label: "Alt Penedès", idealistaSlug: "alt-penedes-barcelona", provinceHint: "barcelona" },
-  { match: /baix\s*pened[eè]s/i, label: "Baix Penedès", idealistaSlug: "baix-penedes-tarragona", provinceHint: "tarragona" },
-  { match: /priorat/i, label: "Priorat", idealistaSlug: "priorat-tarragona", provinceHint: "tarragona" },
+type ZoneDef = {
+  match: RegExp;
+  label: string;
+  idealistaSlug: string;
+  provinceHint: string;
+  /** Comarca / specific area — preferred over province when both appear in the prompt. */
+  specific?: boolean;
+};
+
+const ZONE_DEFS: ZoneDef[] = [
+  { match: /alt\s*camp/i, label: "Alt Camp", idealistaSlug: "alt-camp-tarragona", provinceHint: "tarragona", specific: true },
+  { match: /baix\s*camp/i, label: "Baix Camp", idealistaSlug: "baix-camp-tarragona", provinceHint: "tarragona", specific: true },
+  { match: /alt\s*pened[eè]s/i, label: "Alt Penedès", idealistaSlug: "alt-penedes-barcelona", provinceHint: "barcelona", specific: true },
+  { match: /baix\s*pened[eè]s/i, label: "Baix Penedès", idealistaSlug: "baix-penedes-tarragona", provinceHint: "tarragona", specific: true },
+  { match: /priorat/i, label: "Priorat", idealistaSlug: "priorat-tarragona", provinceHint: "tarragona", specific: true },
   { match: /tarragona/i, label: "Tarragona", idealistaSlug: "tarragona-tarragona", provinceHint: "tarragona" },
   { match: /barcelona/i, label: "Barcelona", idealistaSlug: "barcelona-barcelona", provinceHint: "barcelona" },
   { match: /girona/i, label: "Girona", idealistaSlug: "girona-girona", provinceHint: "girona" },
@@ -28,6 +37,13 @@ const ZONE_DEFS: { match: RegExp; label: string; idealistaSlug: string; province
   { match: /madrid/i, label: "Madrid", idealistaSlug: "madrid-madrid", provinceHint: "madrid" },
   { match: /valencia|valència/i, label: "Valencia", idealistaSlug: "valencia-valencia", provinceHint: "valencia" },
 ];
+
+/** Cities/areas that must NOT appear unless they are an explicit target zone. */
+const FOREIGN_GEO_RE =
+  /\b(fuenlabrada|alcal[aá]\s*de\s*henares|mostoles|m[oó]stoles|getafe|legan[eé]s|madrid|valencia|val[eè]ncia|sevilla|zaragoza|bilbao|murcia|alicante|m[aá]laga)\b/i;
+
+const OFFTOPIC_RE =
+  /\b(receta|recetas|comida|cocin[ao]|mexicana|wiktionary|wordreference|spanishdict|pinterest\.com\/pin|elgourmet|clara\.es\/bienestar)\b/i;
 
 function blobOf(spec: AgentSpec): string {
   return `${spec.prompt} ${spec.filters?.criteria ?? ""} ${spec.search?.queries?.join(" ") ?? ""}`;
@@ -49,16 +65,100 @@ export function extractMaxPriceEuros(text: string): number | null {
   return Math.round(n);
 }
 
-export function extractRealEstateZones(text: string): { label: string; idealistaSlug: string }[] {
-  const out: { label: string; idealistaSlug: string }[] = [];
+export function extractRealEstateZones(text: string): { label: string; idealistaSlug: string; provinceHint: string }[] {
+  const matched = ZONE_DEFS.filter((z) => z.match.test(text));
+  const specific = matched.filter((z) => z.specific);
+  const use = specific.length > 0 ? specific : matched;
+  const out: { label: string; idealistaSlug: string; provinceHint: string }[] = [];
   const seen = new Set<string>();
-  for (const z of ZONE_DEFS) {
-    if (!z.match.test(text)) continue;
+  for (const z of use) {
     if (seen.has(z.idealistaSlug)) continue;
     seen.add(z.idealistaSlug);
-    out.push({ label: z.label, idealistaSlug: z.idealistaSlug });
+    out.push({ label: z.label, idealistaSlug: z.idealistaSlug, provinceHint: z.provinceHint });
   }
   return out;
+}
+
+/** Tokens that must appear in a hit (url/title/snippet) for geo relevance when zones are known. */
+export function realEstateTargetGeoTokens(spec: AgentSpec): string[] {
+  const zones = extractRealEstateZones(blobOf(spec));
+  const tokens = new Set<string>();
+  for (const z of zones) {
+    tokens.add(z.label.toLowerCase());
+    tokens.add(z.idealistaSlug.toLowerCase());
+    tokens.add(z.provinceHint.toLowerCase());
+    // Slug pieces: "alt-camp-tarragona" → alt-camp, alt camp
+    const parts = z.idealistaSlug.split("-");
+    if (parts.length >= 2) tokens.add(`${parts[0]}-${parts[1]}`);
+    tokens.add(z.label.toLowerCase().normalize("NFD").replace(/\p{M}/gu, ""));
+  }
+  return [...tokens];
+}
+
+export function isBarePortalHomepage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+    if (!hostAllowed(host, REAL_ESTATE_ALLOWED_HOSTS)) return false;
+    const path = u.pathname.replace(/\/$/, "") || "/";
+    return path === "/";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Drop SERP noise: recipes/dictionaries and listings outside the requested comarcas
+ * (e.g. Fuenlabrada/Madrid when the goal is Alt Camp / Penedès).
+ */
+export function isRelevantRealEstateHit(
+  hit: { title: string; url: string; snippet?: string },
+  spec: AgentSpec
+): boolean {
+  if (!isRealEstateTarget(spec)) return true;
+  const blob = `${hit.title} ${hit.url} ${hit.snippet ?? ""}`;
+  if (/portal seed/i.test(hit.snippet ?? "")) return true;
+  if (OFFTOPIC_RE.test(blob)) return false;
+
+  const zones = extractRealEstateZones(blobOf(spec));
+  if (zones.length === 0) return !FOREIGN_GEO_RE.test(blob);
+
+  const hay = blob.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+  const tokens = realEstateTargetGeoTokens(spec);
+  const hasTargetGeo = tokens.some((t) => t.length >= 3 && hay.includes(t));
+
+  // Hard reject well-known wrong metros when they are not target zones.
+  const targetHints = new Set(zones.map((z) => z.provinceHint));
+  if (FOREIGN_GEO_RE.test(blob)) {
+    const foreignOk =
+      (/\bmadrid\b/i.test(blob) && targetHints.has("madrid")) ||
+      (/\bvalenc/i.test(blob) && targetHints.has("valencia"));
+    if (!foreignOk) return false;
+  }
+
+  // Prefer hits that mention a requested comarca/slug; allow portal hosts only with geo cue.
+  if (hasTargetGeo) return true;
+
+  try {
+    const host = new URL(hit.url).hostname.replace(/^www\./, "").toLowerCase();
+    if (hostAllowed(host, REAL_ESTATE_ALLOWED_HOSTS)) {
+      // Bare portal roots without zone → noise for scoped agents.
+      if (isBarePortalHomepage(hit.url)) return false;
+      // Listing URL without any target token → reject (stops Madrid Idealista pages).
+      return false;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+export function filterRealEstateHits<T extends { title: string; url: string; snippet?: string }>(
+  hits: T[],
+  spec: AgentSpec
+): T[] {
+  if (!isRealEstateTarget(spec)) return hits;
+  return hits.filter((h) => isRelevantRealEstateHit(h, spec));
 }
 
 function wantsRenovation(text: string): boolean {
@@ -155,10 +255,44 @@ export function realEstatePortalDeepLinkSeeds(spec: AgentSpec): RealEstatePortal
         url: `https://www.idealista.com/venta-viviendas/${z.idealistaSlug}/${priceSeg}`,
         snippet: "Portal seed: Idealista zone search.",
       });
+      if (reno) {
+        seeds.push({
+          title: `Idealista — reformar ${z.label}`,
+          url: `https://www.idealista.com/buscar/venta-viviendas/${encodeURIComponent(`casas a reformar ${z.label}`)}/`,
+          snippet: "Portal seed: Idealista renovation keyword search.",
+        });
+      }
       seeds.push({
         title: `Fotocasa — ${z.label}${maxPrice ? ` ≤${maxPrice}€` : ""}`,
-        url: `https://www.fotocasa.es/es/comprar/viviendas/${encodeURIComponent(z.label.toLowerCase())}/todas-las-zonas/l${maxPrice ? `?maxPrice=${maxPrice}` : ""}`,
+        url: `https://www.fotocasa.es/es/comprar/viviendas/${encodeURIComponent(z.label.toLowerCase())}/todas-las-zonas/l${maxPrice ? `?maxPrice=${maxPrice}` : ""}${reno ? `&text=${encodeURIComponent("reformar")}` : ""}`,
         snippet: "Portal seed: Fotocasa zone search.",
+      });
+      seeds.push({
+        title: `Habitaclia — ${z.label}`,
+        url: `https://www.habitaclia.com/viviendas-${z.idealistaSlug.replace(/-/g, "_")}.htm`,
+        snippet: "Portal seed: Habitaclia zone.",
+      });
+    }
+    // Key towns inside Catalan comarcas — better Idealista coverage than province-wide.
+    const townSeeds: { label: string; slug: string }[] = [];
+    const blobLower = blob.toLowerCase();
+    if (/alt\s*camp/i.test(blobLower)) townSeeds.push({ label: "Valls", slug: "valls-tarragona" });
+    if (/baix\s*camp/i.test(blobLower)) {
+      townSeeds.push({ label: "Reus", slug: "reus-tarragona" });
+      townSeeds.push({ label: "Cambrils", slug: "cambrils-tarragona" });
+    }
+    if (/alt\s*pened/i.test(blobLower)) {
+      townSeeds.push({ label: "Vilafranca del Penedès", slug: "vilafranca-del-penedes-barcelona" });
+    }
+    if (/baix\s*pened/i.test(blobLower)) {
+      townSeeds.push({ label: "El Vendrell", slug: "el-vendrell-tarragona" });
+      townSeeds.push({ label: "Calafell", slug: "calafell-tarragona" });
+    }
+    for (const t of townSeeds.slice(0, 8)) {
+      seeds.push({
+        title: `Idealista — ${t.label}${maxPrice ? ` ≤${maxPrice}€` : ""}`,
+        url: `https://www.idealista.com/venta-viviendas/${t.slug}/${priceSeg}`,
+        snippet: "Portal seed: Idealista town search.",
       });
     }
   } else {

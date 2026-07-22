@@ -44,9 +44,33 @@ assert.equal(
 const price = re.extractMaxPriceEuros(HOUSE_PROMPT);
 assert.equal(price, 50000);
 
-const zones = re.extractRealEstateZones(HOUSE_PROMPT);
-assert.ok(zones.some((z) => /alt camp/i.test(z.label)));
-assert.ok(zones.some((z) => /baix pened/i.test(z.label)));
+const zones = re.extractRealEstateZones(
+  "casas Alt Camp, Baix Camp, Alt Penedès y Baix Penedès (Tarragona/Barcelona, Cataluña, España)"
+);
+assert.equal(zones.length, 4, `expected 4 comarcas, got ${zones.map((z) => z.label).join(",")}`);
+assert.ok(!zones.some((z) => z.label === "Barcelona"), "province Barcelona must not dilute comarcas");
+assert.ok(!zones.some((z) => z.label === "Tarragona"), "province Tarragona must not dilute comarcas");
+
+const badHits = [
+  { title: "Casas y chalets en Fuenlabrada, Madrid", url: "https://www.idealista.com/venta-viviendas/fuenlabrada-madrid/con-chalets/", snippet: "" },
+  { title: "100 recetas de comida mexicana", url: "https://comedera.com/platos-comida-mexicana-recetas/", snippet: "" },
+  { title: "Idealista Alt Camp", url: "https://www.idealista.com/venta-viviendas/alt-camp-tarragona/con-precio-hasta_50000/", snippet: "" },
+  { title: "Portal", url: "https://www.idealista.com/venta-viviendas/baix-penedes-tarragona/", snippet: "Portal seed: Idealista zone search." },
+];
+const kept = re.filterRealEstateHits(badHits, {
+  ...spec,
+  prompt:
+    "casas Alt Camp, Baix Camp, Alt Penedès y Baix Penedès (Tarragona/Barcelona, Cataluña, España)",
+  filters: {
+    criteria:
+      "casas Alt Camp, Baix Camp, Alt Penedès y Baix Penedès (Tarragona/Barcelona, Cataluña, España)",
+    minScore: 50,
+  },
+});
+assert.equal(kept.length, 2, `geo filter kept ${kept.length}: ${kept.map((h) => h.url).join(" | ")}`);
+assert.ok(kept.every((h) => !/fuenlabrada|comida/i.test(`${h.title} ${h.url}`)));
+assert.ok(re.isBarePortalHomepage("https://www.idealista.com/"));
+assert.ok(!re.isBarePortalHomepage("https://www.idealista.com/venta-viviendas/alt-camp-tarragona/"));
 
 const seeds = re.realEstatePortalDeepLinkSeeds(spec);
 assert.ok(seeds.length >= 6, `expected ≥6 portal seeds, got ${seeds.length}`);

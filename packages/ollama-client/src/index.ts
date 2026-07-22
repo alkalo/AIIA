@@ -16,8 +16,8 @@ export interface HardwareInfo {
  * - low: instant (seconds–~2 min)
  * - medium: at least ~5 min of solid search
  * - high: deep research (~30–75 min)
- * - super_high: heavy multi-wave (~75–120 min)
- * - ultra_high: maximum search power, hard-capped at 3 h
+ * - super_high: heavy multi-wave (~90–150 min)
+ * - ultra_high: maximum search power, hard-capped at 4 h
  */
 export type EffortLevel = "low" | "medium" | "high" | "super_high" | "ultra_high";
 
@@ -80,29 +80,28 @@ export const EFFORT_CONFIGS: Record<EffortLevel, EffortConfig> = {
     estimatedMinutes: [30, 75],
   },
   super_high: {
-    steps: 6,
-    maxSources: 180,
-    maxResultsPerQuery: 18,
-    queryExpansion: 12,
-    refinePasses: 2,
-    temperature: 0.28,
+    steps: 8,
+    maxSources: 220,
+    maxResultsPerQuery: 20,
+    queryExpansion: 14,
+    refinePasses: 3,
+    temperature: 0.25,
     numCtx: 8192,
-    extractContentChars: 16000,
-    filterBatchSize: 55,
-    estimatedMinutes: [75, 120],
+    extractContentChars: 18000,
+    filterBatchSize: 60,
+    estimatedMinutes: [90, 150],
   },
   ultra_high: {
-    steps: 10,
-    maxSources: 360,
-    maxResultsPerQuery: 25,
-    queryExpansion: 18,
-    refinePasses: 4,
+    steps: 12,
+    maxSources: 400,
+    maxResultsPerQuery: 28,
+    queryExpansion: 20,
+    refinePasses: 5,
     temperature: 0.2,
     numCtx: 12288,
-    extractContentChars: 24000,
-    filterBatchSize: 70,
-    // Hard ceiling: 3 hours
-    estimatedMinutes: [120, 180],
+    extractContentChars: 28000,
+    filterBatchSize: 80,
+    estimatedMinutes: [150, 240],
   },
 };
 

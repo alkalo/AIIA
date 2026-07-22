@@ -29,12 +29,13 @@ async function main() {
   }
   if (!threw) throw new Error("expected createLlmClient(gemini) without key to throw");
 
-  // Effort mapping — agents always plan with Pro; Flash for extraction
+  // Effort mapping — Pro for plan always; Pro for extract on heavy; Flash on medium extract
   const low = geminiModelsForEffort("medium");
   const high = geminiModelsForEffort("super_high");
   if (low.plannerModel !== GEMINI_PRO) throw new Error(`medium planner should use pro, got ${low.plannerModel}`);
   if (low.extractorModel !== GEMINI_FLASH) throw new Error(`extractor should use flash, got ${low.extractorModel}`);
   if (high.plannerModel !== GEMINI_PRO) throw new Error(`super_high should use pro, got ${high.plannerModel}`);
+  if (high.extractorModel !== GEMINI_PRO) throw new Error(`super_high extract should use pro, got ${high.extractorModel}`);
   if (!String(GEMINI_FLASH).includes("3.6")) throw new Error(`unexpected flash id: ${GEMINI_FLASH}`);
   if (!String(GEMINI_PRO).includes("3.1-pro")) throw new Error(`unexpected pro id: ${GEMINI_PRO}`);
 

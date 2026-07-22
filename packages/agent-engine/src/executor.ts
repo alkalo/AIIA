@@ -66,6 +66,9 @@ import {
   sanitizeSiteQueries,
   sanitizePortalsList,
   REAL_ESTATE_ALLOWED_HOSTS,
+  filterRealEstateHits,
+  isBarePortalHomepage,
+  isRelevantRealEstateHit,
 } from "./real-estate-sources.js";
 import { isGrantTarget, isJobTarget, isRealEstateTarget } from "./opportunity-subtype.js";
 import { sortByDeadlineAsc } from "./deadline.js";
@@ -143,19 +146,19 @@ function shouldStopForEmptyWaves(
   emptyWaves: number,
   _startTime: number,
   _profile: ResearchProfile,
-  _rankedCount: number,
+  rankedCount: number,
   _maxSources: number,
   serpExhausted = false,
   emptySerpWaves = 0
 ): boolean {
   // SERP engines rate-limited/captcha'd — stop hammering queries immediately.
+  // If we already have portal seeds / prior hits, ending SERP is fine (coverage continues via fetch).
   if (serpExhausted) return true;
-  // Soft-dead SERP (0 hits for several waves) — do not keep spinning until wall-clock.
-  const softDeadThreshold = longMode ? 3 : 2;
+  // Soft-dead SERP: allow more empty waves when we already have seeded coverage.
+  const softDeadThreshold = rankedCount > 0 ? (longMode ? 5 : 3) : longMode ? 3 : 2;
   if (emptySerpWaves >= softDeadThreshold) return true;
-  const threshold = longMode ? 4 : 2;
+  const threshold = rankedCount > 0 ? (longMode ? 6 : 3) : longMode ? 4 : 2;
   if (emptyWaves < threshold) return false;
-  // Seeds alone must not keep longMode searching forever under maxSources.
   return true;
 }
 
@@ -327,11 +330,10 @@ export class Executor {
       queries = [...new Set([...grantSeeds, ...queries])].slice(0, Math.max(14, grantSeeds.length + 4));
     }
     if (isRealEstateTarget(spec)) {
-      const reSeeds = realEstateSeedQueries(spec, Math.max(10, cfg.queryExpansion + 4));
-      queries = sanitizeSiteQueries(
-        [...new Set([...reSeeds, ...queries])],
-        REAL_ESTATE_ALLOWED_HOSTS
-      ).slice(0, Math.max(14, reSeeds.length + 4));
+      // Deterministic zone queries only — LLM mega-queries ("4 comarcas in one string")
+      // make Bing return Madrid noise / unrelated pages.
+      const reSeeds = realEstateSeedQueries(spec, Math.max(12, cfg.queryExpansion + 6));
+      queries = sanitizeSiteQueries(reSeeds, REAL_ESTATE_ALLOWED_HOSTS);
     }
 
     const searchLocale = resolveSearchLocale(spec);
@@ -411,11 +413,28 @@ export class Executor {
     );
 
     if (cfg.queryExpansion > 0 && profile.reasoningDepth >= 1) {
+      if (isRealEstateTarget(spec)) {
+        // Skip LLM expand — it invents "chalets renovables" / packs wrong cities.
+        const more = realEstateExpansionQueries(
+          spec,
+          new Set(queries.map((q) => q.toLowerCase())),
+          cfg.queryExpansion
+        );
+        if (more.length > 0) {
+          log(
+            LogAction.LLM_EXPAND,
+            `${more.length} consultas inmobiliarias (deterministas)`,
+            formatBulletList(more),
+            "thinking"
+          );
+          queries = [...new Set([...queries, ...more])].slice(0, queries.length + cfg.queryExpansion);
+        } else {
+          log(LogAction.LLM_EXPAND, "Sin consultas adicionales (modo inmobiliario)", undefined, "thinking");
+        }
+      } else {
       progress("thinking", 6, "Ampliando consultas con IA…", { action: LogAction.LLM_EXPAND });
       const expanded = await this.expandQueries(spec, cfg, queries);
-      const cleanedExpanded = isRealEstateTarget(spec)
-        ? sanitizeSiteQueries(expanded, REAL_ESTATE_ALLOWED_HOSTS)
-        : expanded;
+      const cleanedExpanded = expanded;
       if (cleanedExpanded.length > 0) {
         log(
           LogAction.LLM_EXPAND,
@@ -427,8 +446,6 @@ export class Executor {
         log(LogAction.LLM_EXPAND, "Sin consultas adicionales", undefined, "thinking");
       }
       queries = [...new Set([...queries, ...cleanedExpanded])].slice(0, queries.length + cfg.queryExpansion);
-      if (isRealEstateTarget(spec)) {
-        queries = sanitizeSiteQueries(queries, REAL_ESTATE_ALLOWED_HOSTS);
       }
     }
 
@@ -525,7 +542,7 @@ export class Executor {
         rankedSources,
         searchLimits
       );
-      let raw = collected.results;
+      let raw = filterRealEstateHits(collected.results, spec);
       let serpExhausted = collected.serpExhausted;
       if (serpExhausted) runSerpExhausted = true;
       emptySerpWaves = raw.length === 0 ? emptySerpWaves + 1 : 0;
@@ -555,14 +572,15 @@ export class Executor {
           serpExhausted = true;
           runSerpExhausted = true;
         }
+        raw = filterRealEstateHits(retry.results, spec);
         if (retry.results.length === 0 && raw.length === 0) {
           emptySerpWaves = Math.max(emptySerpWaves, 1);
-        } else if (retry.results.length > 0) {
+        } else if (raw.length > 0) {
           emptySerpWaves = 0;
         }
-        if (retry.results.length > 0) {
+        if (raw.length > 0) {
           rankedSources = await rankSources(
-            dedupeHits([...rankedSources, ...retry.results]),
+            dedupeHits([...rankedSources, ...raw]),
             spec,
             profile,
             maxSources,
@@ -842,7 +860,18 @@ export class Executor {
     let finalItems = filtered
       .map((item) => normalizeExtractedItem(item))
       .filter((item) => validateOpportunityResult(item, spec))
-      .filter((item) => (item.score ?? 0) >= minScore);
+      .filter((item) => (item.score ?? 0) >= minScore)
+      .filter((item) => {
+        if (!isRealEstateTarget(spec)) return true;
+        return isRelevantRealEstateHit(
+          {
+            title: String(item.title ?? ""),
+            url: String(item.url ?? ""),
+            snippet: String(item.description ?? item.summary ?? item.reason ?? ""),
+          },
+          spec
+        );
+      });
 
     if (finalItems.length === 0 && rankedSources.length > 0) {
       finalItems = serpToExtractedItems(rankedSources, spec)
@@ -1204,13 +1233,16 @@ export class Executor {
     spec: AgentSpec,
     cfg: EffortConfig
   ): Promise<ExtractedItem[]> {
-    const top = items.slice(0, 20);
+    const top = items.slice(0, isRealEstateTarget(spec) ? 40 : 20);
     try {
+      const reHint = isRealEstateTarget(spec)
+        ? " Strict geography: demote anything outside the goal comarcas; demote food/dictionary pages; promote Idealista/Fotocasa listings in those zones with renovation potential."
+        : "";
       const response = await this.ollama.chat(
         [
           {
             role: "system",
-            content: `You are a senior research critic. Re-score each item 0-100 for relevance to the goal. Be strict. Return JSON array with url, score, reason.`,
+            content: `You are a senior research critic. Re-score each item 0-100 for relevance to the goal. Be strict.${reHint} Return JSON array with url, score, reason.`,
           },
           {
             role: "user",
@@ -1222,6 +1254,7 @@ export class Executor {
           temperature: 0.2,
           format: "json",
           numCtx: cfg.numCtx,
+          timeoutMs: defaultLlmTimeoutMs(this.criticModel ?? this.plannerModel),
         }
       );
       const scored = coerceJsonArray<ExtractedItem>(response);
@@ -1285,6 +1318,15 @@ export class Executor {
           );
         }
       } else if (source.type === "url") {
+        if (isRealEstateTarget(spec) && isBarePortalHomepage(source.url)) {
+          log(
+            LogAction.WEB_SEARCH,
+            `Homepage portal omitida (usar deep-links de zona): ${source.url}`,
+            undefined,
+            "searching"
+          );
+          continue;
+        }
         try {
           const item = await fetchUrlAsSnippet(source.url);
           seeds.push({ title: item.title, url: item.url, snippet: item.snippet });
@@ -1311,6 +1353,7 @@ export class Executor {
     const schema = spec.output.schema;
     const truncated = content.slice(0, cfg.extractContentChars);
     const grant = isGrantTarget(spec);
+    const realEstate = isRealEstateTarget(spec);
     const systemPrompt = grant
       ? `Extract grant/funding opportunity fields from this page. Return JSON: ${schema.join(", ")}.
 Rules:
@@ -1324,6 +1367,16 @@ Rules:
 - deadline: closing date as written (e.g. Closing 30 July)
 - url: direct link to apply or official call page (deep link, not homepage)
 - If not a specific grant/funding opportunity, set score below 40
+Source URL: ${result.url}`
+      : realEstate
+        ? `Extract a Spanish real-estate listing (casa/chalet/masía/piso) from this page. Return JSON: ${schema.join(", ")}.
+Rules:
+- This is PROPERTY search, NOT jobs. Never mention job postings.
+- title: property headline; location: comarca/municipio/province matching the user goal; price: asking price if shown.
+- summary: 1-2 sentences on condition / renovation potential.
+- If the page is off-topic (recipes, dictionaries, other cities outside the goal zones), set score below 20.
+- If the listing is clearly outside the requested geographic area, set score below 30.
+- Prefer deep listing URLs over city-wide search hubs.
 Source URL: ${result.url}`
       : `Extract relevant fields from this job posting page. Return JSON: ${schema.join(", ")}.
 Rules:
@@ -1414,18 +1467,27 @@ Source URL: ${result.url}`;
     totalPasses: number
   ): Promise<ExtractedItem[]> {
     try {
+      const reHint = isRealEstateTarget(spec)
+        ? ` REAL ESTATE SCORING: reward listings in the exact comarcas/zones from the goal; reward renovation/reform potential and clear price; score <25 if outside those zones (Madrid/Fuenlabrada/etc.), recipes, dictionaries, or bare portal homepages; score 70+ only for on-zone property listings or deep Idealista/Fotocasa search pages for those zones.`
+        : "";
       const response = await this.ollama.chat(
         [
           {
             role: "system",
-            content: `Score each item 0-100. Criteria: ${spec.filters.criteria}. Return JSON array with score and reason.`,
+            content: `Score each item 0-100. Criteria: ${spec.filters.criteria}.${reHint} Return JSON array with score and reason.`,
           },
           {
             role: "user",
             content: `${buildContextBlock(spec.contextAttachments ?? [])}\nPass ${pass + 1}/${totalPasses}\n${JSON.stringify(items)}`,
           },
         ],
-        { model: this.plannerModel, temperature: cfg.temperature, format: "json", numCtx: cfg.numCtx }
+        {
+          model: this.plannerModel,
+          temperature: cfg.temperature,
+          format: "json",
+          numCtx: cfg.numCtx,
+          timeoutMs: defaultLlmTimeoutMs(this.plannerModel),
+        }
       );
       const scored = coerceJsonArray<ExtractedItem>(response);
       if (scored.length > 0) {

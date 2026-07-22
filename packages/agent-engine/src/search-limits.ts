@@ -1,10 +1,25 @@
 import { EFFORT_CONFIGS, type EffortLevel } from "@aiia/ollama-client/browser";
 import type { AgentSpec } from "./types.js";
+import { isGrantTarget, isRealEstateTarget } from "./opportunity-subtype.js";
 
 export interface SearchLimits {
   maxSources: number;
   maxResultsPerQuery: number;
   fromAgentConfig: boolean;
+}
+
+/**
+ * Floor so deep research (esp. real-estate / grants) is not starved by a low
+ * planner maxSources (e.g. 15) when the user picked ultra/super effort.
+ */
+function qualityFloor(spec: AgentSpec, effort: EffortLevel): number {
+  const deep = isRealEstateTarget(spec) || isGrantTarget(spec);
+  if (!deep) return 0;
+  if (effort === "ultra_high") return 120;
+  if (effort === "super_high") return 80;
+  if (effort === "high") return 50;
+  if (effort === "medium") return 35;
+  return 0;
 }
 
 /** Resuelve cuántos enlaces recopilar/priorizar según la spec del agente (o el modo de esfuerzo). */
@@ -15,8 +30,11 @@ export function resolveSearchLimits(spec: AgentSpec, effort: EffortLevel): Searc
 
   const fromAgentConfig = configuredMax != null && configuredMax > 0;
 
-  const maxSources =
-    fromAgentConfig ? Math.max(1, configuredMax) : cfg.maxSources;
+  let maxSources = fromAgentConfig ? Math.max(1, configuredMax) : cfg.maxSources;
+  const floor = qualityFloor(spec, effort);
+  if (floor > 0) {
+    maxSources = Math.max(maxSources, Math.min(floor, cfg.maxSources));
+  }
 
   const maxResultsPerQuery =
     configuredPerQuery != null && configuredPerQuery > 0

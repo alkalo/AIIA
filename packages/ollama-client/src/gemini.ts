@@ -39,10 +39,10 @@ export function geminiModelsForEffort(effort: string): {
     effort === "ultra_high" ||
     effort === "pro" ||
     effort === "max";
-  // Agents: always plan with the strongest Gemini; Flash only for bulk extraction.
+  // Quality-first: Pro for plan + extract + critic on heavy runs; Flash only for light extract.
   return {
     plannerModel: GEMINI_PRO,
-    extractorModel: GEMINI_FLASH,
+    extractorModel: heavy ? GEMINI_PRO : GEMINI_FLASH,
     criticModel: heavy ? GEMINI_PRO : undefined,
   };
 }
@@ -50,7 +50,8 @@ export function geminiModelsForEffort(effort: string): {
 /** Per-call timeout: Gemini Pro needs longer; Flash/Ollama default 180s. */
 export function defaultLlmTimeoutMs(model: string): number {
   const m = model.toLowerCase();
-  if (m.includes("gemini") && m.includes("pro")) return 300_000;
+  if (m.includes("gemini") && m.includes("pro")) return 360_000;
+  if (m.includes("gemini")) return 240_000;
   return 180_000;
 }
 

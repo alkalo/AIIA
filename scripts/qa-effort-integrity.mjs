@@ -18,18 +18,19 @@ const bugs = [];
 for (const e of Object.keys(EFFORT_CONFIGS)) {
   if (JSON.stringify(EFFORT_CONFIGS[e]) !== JSON.stringify(B[e])) bugs.push(`cfg ${e}`);
 }
-if (RESEARCH_PROFILES.ultra_high.wallClockBudgetSec !== 10800) bugs.push("ultra budget");
+if (RESEARCH_PROFILES.ultra_high.wallClockBudgetSec !== 14400) bugs.push("ultra budget");
 if (RESEARCH_PROFILES.medium.estimatedMinutes[0] < 5) bugs.push("medium floor");
-if (!chat.includes("wallClockBudgetSec: 10800")) bugs.push("chat max budget");
+if (!chat.includes("wallClockBudgetSec: 14400")) bugs.push("chat max budget");
 if (!chat.includes("geminiModelForChatMode")) bugs.push("gemini helper");
 if (!i18n.includes('max: "Max"')) bugs.push("i18n en max");
 if (!i18n.includes('max: "Máx"')) bugs.push("i18n es max");
 if (!chatTsx.includes("chatModel, provider)")) bugs.push("provider lock");
 if (!chatTsx.includes("Mode time budget reached")) bugs.push("budget stop");
 if (geminiModelsForEffort("ultra_high").plannerModel !== GEMINI_PRO) bugs.push("ultra gemini");
+if (geminiModelsForEffort("ultra_high").extractorModel !== GEMINI_PRO) bugs.push("ultra gemini extract");
 if (geminiModelsForEffort("low").plannerModel !== GEMINI_PRO) bugs.push("low gemini planner");
 if (geminiModelsForEffort("medium").extractorModel !== GEMINI_FLASH) bugs.push("extractor flash");
-if (defaultLlmTimeoutMs(GEMINI_PRO) !== 300000) bugs.push("pro timeout");
+if (defaultLlmTimeoutMs(GEMINI_PRO) !== 360000) bugs.push("pro timeout");
 if (!String(GEMINI_FLASH).includes("3.6")) bugs.push("flash model id");
 if (!String(GEMINI_PRO).includes("3.1-pro")) bugs.push("pro model id");
 
