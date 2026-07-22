@@ -31,6 +31,17 @@ export interface DuckDuckGoResult {
   snippet: string;
 }
 
+const BLOCKED_PAGE_RE =
+  /captcha|cloudflare|access denied|unusual traffic|are you a robot|cf-browser-verification|challenge-platform|datadome|perimeterx|just a moment|enable javascript|403 forbidden|request blocked|verifica que eres|comprobar que no eres un robot|pardon our interruption/i;
+
+/** True when Playwright landed on an anti-bot / empty challenge page. */
+export function isBlockedPageText(text: string, title = ""): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 80) return true;
+  const head = `${title}\n${trimmed.slice(0, 2500)}`;
+  return BLOCKED_PAGE_RE.test(head);
+}
+
 export async function fetchPageContent(
   url: string,
   options?: ScraperOptions
@@ -39,9 +50,18 @@ export async function fetchPageContent(
   let context: BrowserContext;
 
   if (options?.sessionDir) {
-    context = await b.newContext({ storageState: options.sessionDir, userAgent: USER_AGENT });
+    context = await b.newContext({
+      storageState: options.sessionDir,
+      userAgent: USER_AGENT,
+      locale: "es-ES",
+      viewport: { width: 1365, height: 900 },
+    });
   } else {
-    context = await b.newContext({ userAgent: USER_AGENT });
+    context = await b.newContext({
+      userAgent: USER_AGENT,
+      locale: "es-ES",
+      viewport: { width: 1365, height: 900 },
+    });
   }
 
   const page = await context.newPage();
@@ -51,9 +71,17 @@ export async function fetchPageContent(
       await loginToSite(page, options.loginUrl, options.credentials);
     }
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-    await page.waitForTimeout(2000);
-    const text = await page.evaluate(() => document.body.innerText);
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    const status = response?.status() ?? 0;
+    if (status === 403 || status === 429 || status === 503) {
+      throw new Error(`URL fetch blocked (HTTP ${status}): ${url}`);
+    }
+    await page.waitForTimeout(2500);
+    const title = await page.title().catch(() => "");
+    const text = await page.evaluate(() => document.body?.innerText ?? "");
+    if (isBlockedPageText(text, title)) {
+      throw new Error(`URL fetch challenge/captcha: ${url}`);
+    }
     return text.slice(0, 50000);
   } finally {
     await context.close();

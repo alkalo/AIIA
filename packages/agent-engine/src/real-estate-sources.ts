@@ -65,32 +65,67 @@ export function extractMaxPriceEuros(text: string): number | null {
   return Math.round(n);
 }
 
-export function extractRealEstateZones(text: string): { label: string; idealistaSlug: string; provinceHint: string }[] {
+export function extractRealEstateZones(text: string): {
+  label: string;
+  idealistaSlug: string;
+  provinceHint: string;
+  specific: boolean;
+}[] {
   const matched = ZONE_DEFS.filter((z) => z.match.test(text));
   const specific = matched.filter((z) => z.specific);
   const use = specific.length > 0 ? specific : matched;
-  const out: { label: string; idealistaSlug: string; provinceHint: string }[] = [];
+  const out: { label: string; idealistaSlug: string; provinceHint: string; specific: boolean }[] = [];
   const seen = new Set<string>();
   for (const z of use) {
     if (seen.has(z.idealistaSlug)) continue;
     seen.add(z.idealistaSlug);
-    out.push({ label: z.label, idealistaSlug: z.idealistaSlug, provinceHint: z.provinceHint });
+    out.push({
+      label: z.label,
+      idealistaSlug: z.idealistaSlug,
+      provinceHint: z.provinceHint,
+      specific: Boolean(z.specific),
+    });
   }
   return out;
 }
 
-/** Tokens that must appear in a hit (url/title/snippet) for geo relevance when zones are known. */
+/** Tokens that must appear in a hit for geo relevance when zones are known. */
 export function realEstateTargetGeoTokens(spec: AgentSpec): string[] {
   const zones = extractRealEstateZones(blobOf(spec));
   const tokens = new Set<string>();
+  const onlySpecific = zones.length > 0 && zones.every((z) => z.specific);
   for (const z of zones) {
     tokens.add(z.label.toLowerCase());
     tokens.add(z.idealistaSlug.toLowerCase());
-    tokens.add(z.provinceHint.toLowerCase());
-    // Slug pieces: "alt-camp-tarragona" → alt-camp, alt camp
+    // When the user named comarcas, do NOT accept bare province (stops Tortosa when goal is Alt Camp).
+    if (!onlySpecific) {
+      tokens.add(z.provinceHint.toLowerCase());
+    }
     const parts = z.idealistaSlug.split("-");
     if (parts.length >= 2) tokens.add(`${parts[0]}-${parts[1]}`);
     tokens.add(z.label.toLowerCase().normalize("NFD").replace(/\p{M}/gu, ""));
+  }
+  // Town seeds tokens
+  const blob = blobOf(spec).toLowerCase();
+  if (/alt\s*camp/i.test(blob)) {
+    for (const t of ["valls", "nulles", "montblanc", "alió", "alio", "vila-rodona", "vilarodona"]) {
+      tokens.add(t);
+    }
+  }
+  if (/baix\s*camp/i.test(blob)) {
+    for (const t of ["reus", "cambrils", "riudoms", "mont-roig", "montroig", "vandellòs", "vandellos"]) {
+      tokens.add(t);
+    }
+  }
+  if (/alt\s*pened/i.test(blob)) {
+    for (const t of ["vilafranca", "sant sadurní", "sant sadurni", "gelida", "subirats"]) {
+      tokens.add(t);
+    }
+  }
+  if (/baix\s*pened/i.test(blob)) {
+    for (const t of ["vendrell", "calafell", "cubelles", "cunit", "bellvei", "santa oliva"]) {
+      tokens.add(t);
+    }
   }
   return [...tokens];
 }
@@ -276,19 +311,35 @@ export function realEstatePortalDeepLinkSeeds(spec: AgentSpec): RealEstatePortal
     // Key towns inside Catalan comarcas — better Idealista coverage than province-wide.
     const townSeeds: { label: string; slug: string }[] = [];
     const blobLower = blob.toLowerCase();
-    if (/alt\s*camp/i.test(blobLower)) townSeeds.push({ label: "Valls", slug: "valls-tarragona" });
+    if (/alt\s*camp/i.test(blobLower)) {
+      townSeeds.push(
+        { label: "Valls", slug: "valls-tarragona" },
+        { label: "Montblanc", slug: "montblanc-tarragona" },
+        { label: "Nulles", slug: "nulles-tarragona" }
+      );
+    }
     if (/baix\s*camp/i.test(blobLower)) {
-      townSeeds.push({ label: "Reus", slug: "reus-tarragona" });
-      townSeeds.push({ label: "Cambrils", slug: "cambrils-tarragona" });
+      townSeeds.push(
+        { label: "Reus", slug: "reus-tarragona" },
+        { label: "Cambrils", slug: "cambrils-tarragona" },
+        { label: "Riudoms", slug: "riudoms-tarragona" }
+      );
     }
     if (/alt\s*pened/i.test(blobLower)) {
-      townSeeds.push({ label: "Vilafranca del Penedès", slug: "vilafranca-del-penedes-barcelona" });
+      townSeeds.push(
+        { label: "Vilafranca del Penedès", slug: "vilafranca-del-penedes-barcelona" },
+        { label: "Sant Sadurní d'Anoia", slug: "sant-sadurni-danoia-barcelona" }
+      );
     }
     if (/baix\s*pened/i.test(blobLower)) {
-      townSeeds.push({ label: "El Vendrell", slug: "el-vendrell-tarragona" });
-      townSeeds.push({ label: "Calafell", slug: "calafell-tarragona" });
+      townSeeds.push(
+        { label: "El Vendrell", slug: "el-vendrell-tarragona" },
+        { label: "Calafell", slug: "calafell-tarragona" },
+        { label: "Cubelles", slug: "cubelles-barcelona" },
+        { label: "Cunit", slug: "cunit-tarragona" }
+      );
     }
-    for (const t of townSeeds.slice(0, 8)) {
+    for (const t of townSeeds.slice(0, 10)) {
       seeds.push({
         title: `Idealista — ${t.label}${maxPrice ? ` ≤${maxPrice}€` : ""}`,
         url: `https://www.idealista.com/venta-viviendas/${t.slug}/${priceSeg}`,

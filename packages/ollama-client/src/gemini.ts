@@ -47,11 +47,14 @@ export function geminiModelsForEffort(effort: string): {
   };
 }
 
-/** Per-call timeout: Gemini Pro needs longer; Flash/Ollama default 180s. */
+/** Per-call timeout: larger models need longer; Flash/Ollama small = 3 min. */
 export function defaultLlmTimeoutMs(model: string): number {
   const m = model.toLowerCase();
   if (m.includes("gemini") && m.includes("pro")) return 360_000;
   if (m.includes("gemini")) return 240_000;
+  if (/\b(70b|72b|32b)\b/.test(m)) return 600_000;
+  if (/\b(14b|13b|15b)\b/.test(m)) return 420_000;
+  if (/\b(7b|8b|9b)\b/.test(m)) return 300_000;
   return 180_000;
 }
 

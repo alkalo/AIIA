@@ -28,12 +28,16 @@ import {
   expandWebSearchQueries,
   jobPortalSeeds,
   isJobOrListingSearch,
+  isRealEstateListingSearch,
   looksLikeEmptyMarketAnswer,
   looksLikeFailedSearchNarrative,
   hasUsefulPortalLinks,
   isAntiBotJobBoard,
+  isAntiBotPropertyPortal,
   mergeJobPortalSeeds,
   composeJobPortalAnswer,
+  composeRealEstatePortalAnswer,
+  realEstatePortalSeeds,
   CHAT_MODE_STORAGE_KEY,
 } from "../chatModes";
 import type { AiProviderId } from "../api";
@@ -530,7 +534,7 @@ RULES FOR YOUR ANSWER:
       if (mode.autoFetchTop > 0 && hits.length > 0) {
         setToolStatus(t("chat.toolFetchDeep"));
         const top = preferPortalHits(hits)
-          .filter((h) => !isAntiBotJobBoard(h.url))
+          .filter((h) => !isAntiBotJobBoard(h.url) && !isAntiBotPropertyPortal(h.url))
           .slice(0, Math.min(mode.autoFetchTop, 4));
         const pages: string[] = [];
         for (const h of top) {
@@ -553,9 +557,9 @@ RULES FOR YOUR ANSWER:
     if (toolName === "fetch_url") {
       setToolStatus(t("chat.toolFetch"));
       const url = args.url || "";
-      if (isAntiBotJobBoard(url)) {
+      if (isAntiBotJobBoard(url) || isAntiBotPropertyPortal(url)) {
         return {
-          result: `Job board URL (scraping usually blocked): ${url}
+          result: `Portal URL (scraping usually blocked): ${url}
 Do NOT narrate HTTP errors. Give the user this URL to open in their browser (login if needed). That is a valid answer.`,
         };
       }
@@ -851,6 +855,7 @@ If this is a job board, present the URL to the user anyway. Do not say there are
       const mustSearch = messageRequiresWebSearch(messageText);
       // Clear job/offer intent → portals only (no LLM). Broader JOB_RE still upgrades mode elsewhere.
       const jobListingAsk = isJobOrListingSearch(messageText);
+      const realEstateAsk = !jobListingAsk && isRealEstateListingSearch(messageText);
       // Keep original user text for portal seeds even if tool queries drop job nouns.
       if (mustSearch) {
         lastUserJobQueryRef.current = messageText;
@@ -910,6 +915,47 @@ If this is a job board, present the URL to the user anyway. Do not say there are
         lastSearchHitsRef.current = preferPortalHits(
           mergeJobPortalSeeds(extraHits, messageText)
         );
+        updateStreaming(finalText);
+        const saved = await api.addChatMessage(chatId, "assistant", finalText);
+        setMessages((prev) => {
+          const withoutStream = prev.filter((m) => !m.streaming);
+          return [
+            ...withoutStream,
+            { id: saved.id, role: "assistant", content: finalText },
+          ];
+        });
+        await refreshChats();
+        return;
+      }
+
+      // Real-estate listing asks: Idealista/Fotocasa deep-links (no LLM 403 essays).
+      if (realEstateAsk) {
+        lastUserJobQueryRef.current = messageText;
+        const userMsg = await api.addChatMessage(
+          chatId,
+          "user",
+          contentForModel,
+          undefined,
+          imagePaths.length ? imagePaths : undefined
+        );
+        userPersisted = true;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: userMsg.id,
+            role: "user",
+            content: contentForModel,
+            images: imagePaths.length ? imagePaths : undefined,
+          },
+          { id: "streaming", role: "assistant", content: "", streaming: true },
+        ]);
+        setToolStatus(t("chat.toolSearch"));
+        const finalText = composeRealEstatePortalAnswer(
+          messageText,
+          t("chat.emptyMarketFallback"),
+          t("chat.emptyMarketHint")
+        );
+        lastSearchHitsRef.current = preferPortalHits(realEstatePortalSeeds(messageText));
         updateStreaming(finalText);
         const saved = await api.addChatMessage(chatId, "assistant", finalText);
         setMessages((prev) => {

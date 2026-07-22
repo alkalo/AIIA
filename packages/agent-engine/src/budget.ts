@@ -3,13 +3,19 @@ import type { ResearchProfile, BudgetPhase } from "@aiia/ollama-client";
 export function fetchLimitForBudget(
   total: number,
   profile: ResearchProfile,
-  phase: BudgetPhase
+  phase: BudgetPhase,
+  pinnedHigh = 0
 ): number {
   if (profile.fetchPolicy === "none") return 0;
   let ratio = profile.fetchRatio;
   if (phase === "tight") ratio *= 0.5;
   if (phase === "critical") ratio *= 0.25;
-  return Math.min(total, Math.max(profile.fetchPolicy === "top" ? 3 : 1, Math.ceil(total * ratio)));
+  const computed = Math.min(
+    total,
+    Math.max(profile.fetchPolicy === "top" ? 3 : 1, Math.ceil(total * ratio))
+  );
+  // Always fetch every high-priority portal seed even late in the wall-clock.
+  return Math.min(total, Math.max(computed, pinnedHigh));
 }
 
 export function extractLimitForBudget(

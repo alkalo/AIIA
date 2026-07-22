@@ -69,8 +69,26 @@ const kept = re.filterRealEstateHits(badHits, {
 });
 assert.equal(kept.length, 2, `geo filter kept ${kept.length}: ${kept.map((h) => h.url).join(" | ")}`);
 assert.ok(kept.every((h) => !/fuenlabrada|comida/i.test(`${h.title} ${h.url}`)));
-assert.ok(re.isBarePortalHomepage("https://www.idealista.com/"));
-assert.ok(!re.isBarePortalHomepage("https://www.idealista.com/venta-viviendas/alt-camp-tarragona/"));
+assert.ok(
+  !re.isRelevantRealEstateHit(
+    {
+      title: "Casas Tortosa",
+      url: "https://www.idealista.com/venta-viviendas/tortosa-tarragona/",
+      snippet: "",
+    },
+    {
+      ...spec,
+      prompt:
+        "casas Alt Camp, Baix Camp, Alt Penedès y Baix Penedès (Tarragona/Barcelona, Cataluña, España)",
+      filters: {
+        criteria:
+          "casas Alt Camp, Baix Camp, Alt Penedès y Baix Penedès (Tarragona/Barcelona, Cataluña, España)",
+        minScore: 50,
+      },
+    }
+  ),
+  "province-only Idealista must not pass when comarcas are specified"
+);
 
 const seeds = re.realEstatePortalDeepLinkSeeds(spec);
 assert.ok(seeds.length >= 6, `expected ≥6 portal seeds, got ${seeds.length}`);

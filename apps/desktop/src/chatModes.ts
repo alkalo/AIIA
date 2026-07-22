@@ -145,17 +145,20 @@ export function resolveChatMode(selected: ChatModeId, userMessage: string): Chat
  */
 export function ensureSearchCoverageMode(selected: ChatModeId, userMessage: string): ChatModeConfig {
   const msg = userMessage.trim();
-  const needsCoverage = JOB_RE.test(msg) || SEARCH_RE.test(msg);
+  const needsCoverage =
+    JOB_RE.test(msg) || SEARCH_RE.test(msg) || isRealEstateListingSearch(msg);
   const resolved = resolveChatMode(selected, msg);
   if (!needsCoverage) return resolved;
   if (selected === "max" || resolved.id === "max") return CHAT_MODES.max;
   if (resolved.id === "pro") return CHAT_MODES.pro;
+  // Property searches benefit from Max-level time when Auto/Instant.
+  if (isRealEstateListingSearch(msg) && selected === "auto") return CHAT_MODES.max;
   return CHAT_MODES.pro;
 }
 
 export function messageRequiresWebSearch(userMessage: string): boolean {
   const msg = userMessage.trim();
-  return JOB_RE.test(msg) || SEARCH_RE.test(msg);
+  return JOB_RE.test(msg) || SEARCH_RE.test(msg) || isRealEstateListingSearch(msg);
 }
 
 export function loadStoredChatMode(): ChatModeId {
@@ -388,6 +391,85 @@ export function isAntiBotJobBoard(url: string): boolean {
   return /linkedin\.com|indeed\.com|infojobs\.net|remoteok\.com|weworkremotely\.com|jooble\.org|tecnoempleo\.com|glassdoor\.com|hitmarker\.net|remotegamejobs\.com|gamesjobsdirect\.com|workwithindies\.com/i.test(
     url
   );
+}
+
+/** Property portals that often block headless fetch. */
+export function isAntiBotPropertyPortal(url: string): boolean {
+  return /idealista\.com|fotocasa\.es|habitaclia\.com|milanuncios\.com|pisos\.com|yaencontre\.com|indomio\.es/i.test(
+    url
+  );
+}
+
+export function isRealEstateListingSearch(userMessage: string): boolean {
+  const msg = userMessage.trim();
+  if (!msg) return false;
+  const hasProperty =
+    /\b(casa|casas|piso|pisos|chalet|chalets|mas[ií]a|masias|vivienda|viviendas|inmueble|inmobiliari|reformar|reforma|rehabilit)\b/i.test(
+      msg
+    );
+  const hasPortal = /\b(idealista|fotocasa|habitaclia|milanuncios|pisos\.com|yaencontre)\b/i.test(msg);
+  const hasZone =
+    /\b(alt\s*camp|baix\s*camp|pened[eè]s|tarragona|barcelona|catalu[nñ]a|comarca|madrid|valencia)\b/i.test(
+      msg
+    );
+  return (hasProperty && (hasZone || /busca|buscar|anuncio|listado|venta|comprar/i.test(msg))) || hasPortal;
+}
+
+export function realEstatePortalSeeds(
+  query: string
+): { title: string; url: string; snippet: string }[] {
+  const enc = encodeURIComponent(query.slice(0, 80));
+  const zones = [
+    { label: "Alt Camp", slug: "alt-camp-tarragona" },
+    { label: "Baix Camp", slug: "baix-camp-tarragona" },
+    { label: "Alt Penedès", slug: "alt-penedes-barcelona" },
+    { label: "Baix Penedès", slug: "baix-penedes-tarragona" },
+  ].filter((z) => new RegExp(z.label.replace(/\s+/g, "\\s*"), "i").test(query));
+  const use = zones.length > 0 ? zones : [{ label: "España", slug: "" }];
+  const seeds: { title: string; url: string; snippet: string }[] = [];
+  for (const z of use.slice(0, 4)) {
+    if (z.slug) {
+      seeds.push({
+        title: `Idealista — ${z.label}`,
+        url: `https://www.idealista.com/venta-viviendas/${z.slug}/`,
+        snippet: "Portal Idealista zone search.",
+      });
+      seeds.push({
+        title: `Fotocasa — ${z.label}`,
+        url: `https://www.fotocasa.es/es/comprar/viviendas/${encodeURIComponent(z.label.toLowerCase())}/todas-las-zonas/l`,
+        snippet: "Portal Fotocasa zone search.",
+      });
+    }
+  }
+  seeds.push(
+    {
+      title: `Idealista — buscar: ${query.slice(0, 40)}`,
+      url: `https://www.idealista.com/buscar/venta-viviendas/${enc}/`,
+      snippet: "Portal Idealista keyword search.",
+    },
+    {
+      title: "Habitaclia",
+      url: `https://www.habitaclia.com/viviendas.htm?texto=${enc}`,
+      snippet: "Portal Habitaclia.",
+    },
+    {
+      title: "Milanuncios inmobiliaria",
+      url: `https://www.milanuncios.com/inmobiliaria/?q=${enc}`,
+      snippet: "Portal Milanuncios.",
+    }
+  );
+  return seeds;
+}
+
+export function composeRealEstatePortalAnswer(
+  query: string,
+  intro: string,
+  hint: string,
+  limit = 12
+): string {
+  const seeds = realEstatePortalSeeds(query).slice(0, limit);
+  const block = seeds.map((h, i) => `${i + 1}. ${h.title} — ${h.url}`).join("\n");
+  return [intro, "", block, "", hint].join("\n");
 }
 
 /** Merge portal seeds into a hit list (deduped by URL). */

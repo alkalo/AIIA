@@ -710,14 +710,19 @@ export class Executor {
             ? jobPortalDeepLinkSeeds(spec)
             : [];
       if (emergencyPortals.length > 0) {
-        rankedSources = emergencyPortals.map((s) => ({
-          title: s.title,
-          url: s.url,
-          snippet: s.snippet,
-          relevance: 78,
-          fetchPriority: "skip" as const,
-          rankReason: "Emergency portal seeds",
-        }));
+        rankedSources = emergencyPortals.map((s) => {
+          const fetchable = !isBarePortalHomepage(s.url);
+          return {
+            title: s.title,
+            url: s.url,
+            snippet: s.snippet,
+            relevance: 92,
+            fetchPriority: fetchable ? ("high" as const) : ("skip" as const),
+            rankReason: fetchable
+              ? "Emergency portal zone seed — fetch"
+              : "Emergency portal homepage",
+          };
+        });
         log(
           LogAction.WEB_SEARCH,
           `Sin SERP — se usan ${emergencyPortals.length} portales de cobertura`,
@@ -736,7 +741,8 @@ export class Executor {
     }
 
     const bPhase = budgetPhase(startTime, profile);
-    const fetchLimit = fetchLimitForBudget(rankedSources.length, profile, bPhase);
+    const pinnedHigh = rankedSources.filter((r) => r.fetchPriority === "high").length;
+    const fetchLimit = fetchLimitForBudget(rankedSources.length, profile, bPhase, pinnedHigh);
     const toFetch = sourcesToFetch(rankedSources, fetchLimit);
 
     if (profile.fetchPolicy !== "none" && toFetch.length > 0) {
@@ -1214,10 +1220,14 @@ export class Executor {
             "searching"
           );
         }
-      } catch {
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const blocked = /challenge|captcha|blocked \(HTTP/i.test(msg);
         log(
           LogAction.PAGE_FETCH,
-          `Página ${i + 1}/${toFetch.length} — error al leer, se usa snippet`,
+          blocked
+            ? `Página ${i + 1}/${toFetch.length} — anti-bot/403, se conserva deep-link`
+            : `Página ${i + 1}/${toFetch.length} — error al leer, se usa snippet`,
           truncateUrl(result.url),
           "searching"
         );
@@ -1282,7 +1292,7 @@ export class Executor {
             content: `Goal: ${spec.prompt}\nExisting: ${JSON.stringify(current)}\nCriteria: ${spec.filters.criteria}`,
           },
         ],
-        { model: this.plannerModel, temperature: cfg.temperature, format: "json", numCtx: cfg.numCtx }
+        { model: this.plannerModel, temperature: cfg.temperature, format: "json", numCtx: cfg.numCtx, timeoutMs: defaultLlmTimeoutMs(this.plannerModel) }
       );
       const parsed = coerceJsonArray<unknown>(response);
       return parsed.filter((q): q is string => typeof q === "string" && q.trim().length > 0);
@@ -1537,7 +1547,7 @@ Source URL: ${result.url}`;
           { role: "system", content: "Summarize top search results in 3-5 sentences." },
           { role: "user", content: `Agent: ${spec.name}\nTotal: ${items.length}\nTop:\n${top}` },
         ],
-        { model: this.extractorModel, temperature: 0.4, numCtx: Math.min(cfg.numCtx, 8192) }
+        { model: this.extractorModel, temperature: 0.4, numCtx: Math.min(cfg.numCtx, 8192), timeoutMs: defaultLlmTimeoutMs(this.extractorModel) }
       );
     } catch {
       return `Found ${items.length} results for ${spec.name}`;

@@ -178,7 +178,7 @@ export class OllamaClient implements LlmClient {
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<string> {
-    const timeoutMs = options.timeoutMs ?? 90_000;
+    const timeoutMs = options.timeoutMs ?? 180_000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
