@@ -4,6 +4,13 @@ import type { AgentSpec } from "./types.js";
 import { buildQueriesFromPrompt } from "./query-replan.js";
 import { resolveTemplateId } from "./templates.js";
 import { coerceJsonObject } from "./json-utils.js";
+import { isRealEstateTarget } from "./opportunity-subtype.js";
+import {
+  REAL_ESTATE_ALLOWED_HOSTS,
+  sanitizePortalsList,
+  sanitizeSiteQueries,
+  realEstateSeedQueries,
+} from "./real-estate-sources.js";
 
 export interface PlannedQuery {
   query: string;
@@ -20,14 +27,20 @@ export interface SearchPlan {
 }
 
 export function fallbackSearchPlan(spec: AgentSpec): SearchPlan {
-  const built = buildQueriesFromPrompt(spec);
+  const built = isRealEstateTarget(spec)
+    ? realEstateSeedQueries(spec, 12)
+    : buildQueriesFromPrompt(spec);
   return {
     intent: spec.prompt,
-    sourceTypes: ["web"],
-    portals: [],
+    sourceTypes: isRealEstateTarget(spec)
+      ? ["property portals", "real estate listings"]
+      : ["web"],
+    portals: isRealEstateTarget(spec) ? [...REAL_ESTATE_ALLOWED_HOSTS] : [],
     queries: built.map((q, i) => ({ query: q, priority: built.length - i })),
     coverageCriteria: spec.filters.criteria || "Relevant results matching the user goal",
-    avoid: [],
+    avoid: isRealEstateTarget(spec)
+      ? ["invented domains", "job boards", "Australia/US portals unless asked"]
+      : [],
   };
 }
 
@@ -55,13 +68,14 @@ export async function buildSearchPlan(
   "coverageCriteria": "how to know coverage is sufficient",
   "avoid": ["things to exclude"]
 }
-Each query MUST include key terms from the goal. Use site: operators for relevant portals.
+Each query MUST include key terms from the goal. Use site: operators ONLY on real, well-known portals — never invent domain names.
+For Spain/Catalonia property searches: write queries in Spanish; portals must be idealista.com, fotocasa.es, habitaclia.com, milanuncios.com, pisos.com, yaencontre.com. Never use realestate.com.au or fake regional *.com hosts.
 Write search queries in English when the goal targets Australia, New Zealand, global, or English-language portals — even if the goal text is in Spanish.
 Return ONLY valid JSON.`,
         },
         {
           role: "user",
-          content: `Goal: ${spec.prompt}\nCriteria: ${spec.filters.criteria}\nTemplate: ${resolveTemplateId((spec.templateId ?? "custom") as import("./types.js").TemplateId)}`,
+          content: `Goal: ${spec.prompt}\nCriteria: ${spec.filters.criteria}\nTemplate: ${resolveTemplateId((spec.templateId ?? "custom") as import("./types.js").TemplateId)}${isRealEstateTarget(spec) ? "\nSubtype: real_estate (Spanish property portals only)" : ""}`,
         },
       ],
       { model: plannerModel, temperature: 0.35, format: "json", numCtx, timeoutMs: defaultLlmTimeoutMs(plannerModel) }
@@ -82,11 +96,32 @@ Return ONLY valid JSON.`,
           .filter((q): q is PlannedQuery => !!q && q.query.trim().length > 3)
       : fallback.queries;
 
+    let portals = parsed.portals ?? fallback.portals;
+    let cleanedQueries = queries.length > 0 ? queries : fallback.queries;
+    if (isRealEstateTarget(spec)) {
+      portals = sanitizePortalsList(
+        portals.length > 0 ? portals : [...REAL_ESTATE_ALLOWED_HOSTS],
+        REAL_ESTATE_ALLOWED_HOSTS
+      );
+      if (portals.length === 0) portals = [...REAL_ESTATE_ALLOWED_HOSTS];
+      const sanitized = sanitizeSiteQueries(
+        cleanedQueries.map((q) => q.query),
+        REAL_ESTATE_ALLOWED_HOSTS
+      );
+      cleanedQueries =
+        sanitized.length > 0
+          ? sanitized.map((query, i) => ({
+              query,
+              priority: cleanedQueries[i]?.priority ?? 5,
+            }))
+          : fallback.queries;
+    }
+
     return {
       intent: parsed.intent ?? fallback.intent,
       sourceTypes: parsed.sourceTypes?.length ? parsed.sourceTypes : fallback.sourceTypes,
-      portals: parsed.portals ?? fallback.portals,
-      queries: queries.length > 0 ? queries : fallback.queries,
+      portals,
+      queries: cleanedQueries,
       coverageCriteria: parsed.coverageCriteria ?? fallback.coverageCriteria,
       avoid: parsed.avoid ?? fallback.avoid,
     };

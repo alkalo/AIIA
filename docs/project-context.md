@@ -63,9 +63,11 @@ La plantilla `opportunities` admite subtipos vía `opportunitySubtype`:
 |---------|---------------|---------------|
 | `jobs` | Tabla (empresa, ubicación, etc.) | `title`, `company`, `location`, `url`, … |
 | `grants` | Tarjetas tipo boletín | `scope`, `organization`, `program_name`, `description`, `max_funding`, `currency`, `deadline`, `url` |
+| `real_estate` | Tabla / listado | `title`, `location`, `price`, `summary`, `url` — portales Idealista/Fotocasa/… |
 | `tenders`, `events` | Tarjetas | Similar a grants según prompt |
 
-- Si `opportunitySubtype` no está en el spec, se infiere del prompt (keywords: grant, subvención, convocatoria, funding, beca, tender, licitación).
+- Si `opportunitySubtype` no está en el spec, se infiere del prompt (keywords: grant, subvención, casa/piso/reformar/idealista, convocatoria, funding, beca, tender, licitación).
 - Fuentes de búsqueda: `duckduckgo` (siempre), `url` (página estática), `rss` (feed Atom/RSS).
-- Dedupe por defecto: grants → `organization` + `program_name`; jobs → `title` + `url`.
+- Dedupe por defecto: grants → `organization` + `program_name`; jobs/real_estate → `title` + `url`.
+- Inmobiliario: semillas deep-link a Idealista/Fotocasa/Habitaclia/… cuando SERP está bloqueado; se filtran `site:` inventados; locale `es-ES` en España/Cataluña.
 - Ejemplo de prompt grants: *"Grants para comunidades rurales, wellbeing y proyectos locales (Australia y global). Campos: scope, organization, program_name, description, max_funding, currency, deadline, url."*

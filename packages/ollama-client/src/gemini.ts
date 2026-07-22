@@ -2,8 +2,10 @@
 
 export type AiProviderId = "local" | "gemini";
 
-export const GEMINI_FLASH = "gemini-2.5-flash";
-export const GEMINI_PRO = "gemini-2.5-pro";
+/** Default / medium effort — agentic loops, speed + intelligence. */
+export const GEMINI_FLASH = "gemini-3.6-flash";
+/** High+ effort — strongest Gemini for complex agent planning/critique. */
+export const GEMINI_PRO = "gemini-3.1-pro-preview";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -37,9 +39,9 @@ export function geminiModelsForEffort(effort: string): {
     effort === "ultra_high" ||
     effort === "pro" ||
     effort === "max";
-  const model = heavy ? GEMINI_PRO : GEMINI_FLASH;
+  // Agents: always plan with the strongest Gemini; Flash only for bulk extraction.
   return {
-    plannerModel: model,
+    plannerModel: GEMINI_PRO,
     extractorModel: GEMINI_FLASH,
     criticModel: heavy ? GEMINI_PRO : undefined,
   };

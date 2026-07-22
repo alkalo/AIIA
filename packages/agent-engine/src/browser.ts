@@ -27,5 +27,6 @@ export {
   resolveOpportunitySubtype,
   isGrantTarget,
   isJobTarget,
+  isRealEstateTarget,
   isOpportunityCardView,
 } from "./opportunity-subtype.js";

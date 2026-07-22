@@ -59,7 +59,15 @@ import {
 } from "./result-quality.js";
 import { sectorExpansionQueries, jobPortalDeepLinkSeeds } from "./sector-sources.js";
 import { grantExpansionQueries, grantSeedQueries, grantPortalDeepLinkSeeds } from "./grant-sources.js";
-import { isGrantTarget, isJobTarget } from "./opportunity-subtype.js";
+import {
+  realEstateExpansionQueries,
+  realEstateSeedQueries,
+  realEstatePortalDeepLinkSeeds,
+  sanitizeSiteQueries,
+  sanitizePortalsList,
+  REAL_ESTATE_ALLOWED_HOSTS,
+} from "./real-estate-sources.js";
+import { isGrantTarget, isJobTarget, isRealEstateTarget } from "./opportunity-subtype.js";
 import { sortByDeadlineAsc } from "./deadline.js";
 
 const GRANT_WAVE_FALLBACKS = [
@@ -82,6 +90,8 @@ function heuristicCoverageQueries(
 ): string[] {
   const fromGrant = grantExpansionQueries(spec, usedQueries, count);
   if (fromGrant.length > 0) return fromGrant;
+  const fromRe = realEstateExpansionQueries(spec, usedQueries, count);
+  if (fromRe.length > 0) return fromRe;
   if (isGrantTarget(spec)) {
     return GRANT_WAVE_FALLBACKS.filter((q) => !usedQueries.has(q.trim().toLowerCase())).slice(0, count);
   }
@@ -110,6 +120,7 @@ function resolveWaveQueries(
   const sector = [
     ...sectorExpansionQueries(spec, usedQueries, need),
     ...grantExpansionQueries(spec, usedQueries, need),
+    ...realEstateExpansionQueries(spec, usedQueries, need),
   ];
   let waveQueries = [...new Set([...fromCoverage, ...sector])];
 
@@ -298,18 +309,37 @@ export class Executor {
     });
 
     let plan: SearchPlan = await buildSearchPlan(spec, profile, this.ollama, this.plannerModel, cfg.numCtx);
+    if (isRealEstateTarget(spec)) {
+      plan = {
+        ...plan,
+        portals: sanitizePortalsList(
+          plan.portals.length > 0 ? plan.portals : [...REAL_ESTATE_ALLOWED_HOSTS],
+          REAL_ESTATE_ALLOWED_HOSTS
+        ),
+      };
+      if (plan.portals.length === 0) {
+        plan = { ...plan, portals: [...REAL_ESTATE_ALLOWED_HOSTS] };
+      }
+    }
     let queries = queriesFromPlan(plan);
     if (isGrantTarget(spec)) {
       const grantSeeds = grantSeedQueries(spec, Math.max(10, cfg.queryExpansion + 4));
       queries = [...new Set([...grantSeeds, ...queries])].slice(0, Math.max(14, grantSeeds.length + 4));
+    }
+    if (isRealEstateTarget(spec)) {
+      const reSeeds = realEstateSeedQueries(spec, Math.max(10, cfg.queryExpansion + 4));
+      queries = sanitizeSiteQueries(
+        [...new Set([...reSeeds, ...queries])],
+        REAL_ESTATE_ALLOWED_HOSTS
+      ).slice(0, Math.max(14, reSeeds.length + 4));
     }
 
     const searchLocale = resolveSearchLocale(spec);
     this.searchLocale = searchLocale;
 
     const seedSources = await this.collectSeedSources(spec, log);
-    // Always inject portal deep-links for jobs/grants so a dead SERP cannot yield zero coverage.
-    if (isJobTarget(spec) && !isGrantTarget(spec)) {
+    // Always inject portal deep-links for jobs/grants/real-estate so a dead SERP cannot yield zero coverage.
+    if (isJobTarget(spec) && !isGrantTarget(spec) && !isRealEstateTarget(spec)) {
       const portals = jobPortalDeepLinkSeeds(spec);
       for (const s of portals) {
         seedSources.push({ title: s.title, url: s.url, snippet: s.snippet });
@@ -332,6 +362,20 @@ export class Executor {
         log(
           LogAction.WEB_SEARCH,
           `Semillas de portales de grants: ${portals.length}`,
+          portals.map((p) => `  → ${p.title} (${truncateUrl(p.url)})`).join("\n"),
+          "searching"
+        );
+      }
+    }
+    if (isRealEstateTarget(spec)) {
+      const portals = realEstatePortalDeepLinkSeeds(spec);
+      for (const s of portals) {
+        seedSources.push({ title: s.title, url: s.url, snippet: s.snippet });
+      }
+      if (portals.length > 0) {
+        log(
+          LogAction.WEB_SEARCH,
+          `Semillas de portales inmobiliarios: ${portals.length}`,
           portals.map((p) => `  → ${p.title} (${truncateUrl(p.url)})`).join("\n"),
           "searching"
         );
@@ -369,17 +413,23 @@ export class Executor {
     if (cfg.queryExpansion > 0 && profile.reasoningDepth >= 1) {
       progress("thinking", 6, "Ampliando consultas con IA…", { action: LogAction.LLM_EXPAND });
       const expanded = await this.expandQueries(spec, cfg, queries);
-      if (expanded.length > 0) {
+      const cleanedExpanded = isRealEstateTarget(spec)
+        ? sanitizeSiteQueries(expanded, REAL_ESTATE_ALLOWED_HOSTS)
+        : expanded;
+      if (cleanedExpanded.length > 0) {
         log(
           LogAction.LLM_EXPAND,
-          `${expanded.length} consultas nuevas generadas`,
-          formatBulletList(expanded),
+          `${cleanedExpanded.length} consultas nuevas generadas`,
+          formatBulletList(cleanedExpanded),
           "thinking"
         );
       } else {
         log(LogAction.LLM_EXPAND, "Sin consultas adicionales", undefined, "thinking");
       }
-      queries = [...new Set([...queries, ...expanded])].slice(0, queries.length + cfg.queryExpansion);
+      queries = [...new Set([...queries, ...cleanedExpanded])].slice(0, queries.length + cfg.queryExpansion);
+      if (isRealEstateTarget(spec)) {
+        queries = sanitizeSiteQueries(queries, REAL_ESTATE_ALLOWED_HOSTS);
+      }
     }
 
     progress("planning", 8, `${queries.length} consultas · ${plan.sourceTypes.slice(0, 3).join(", ") || "web"}`);
@@ -636,9 +686,11 @@ export class Executor {
     if (rankedSources.length === 0) {
       const emergencyPortals = isGrantTarget(spec)
         ? grantPortalDeepLinkSeeds(spec)
-        : isJobTarget(spec)
-          ? jobPortalDeepLinkSeeds(spec)
-          : [];
+        : isRealEstateTarget(spec)
+          ? realEstatePortalDeepLinkSeeds(spec)
+          : isJobTarget(spec)
+            ? jobPortalDeepLinkSeeds(spec)
+            : [];
       if (emergencyPortals.length > 0) {
         rankedSources = emergencyPortals.map((s) => ({
           title: s.title,
@@ -796,11 +848,11 @@ export class Executor {
       finalItems = serpToExtractedItems(rankedSources, spec)
         .map((item) => normalizeExtractedItem(item))
         .filter((item) => {
-          if (!isGrantTarget(spec)) return validateOpportunityResult(item, spec);
           const url = String(item.url ?? "");
           const snippet = String(item.description ?? item.summary ?? item.reason ?? "");
           // Portal deep-link seeds must survive when SERP is dead (homepages are intentional).
           if (/portal seed/i.test(snippet)) return Boolean(url);
+          if (!isGrantTarget(spec)) return validateOpportunityResult(item, spec);
           if (!validateOpportunityResult(item, spec)) return false;
           return (
             isDirectGrantUrl(url) ||
@@ -829,7 +881,7 @@ export class Executor {
           .filter((item) => Boolean(item.url))
           .slice(0, 12);
       }
-      if (finalItems.length === 0 && isJobTarget(spec) && !isGrantTarget(spec)) {
+      if (finalItems.length === 0 && isJobTarget(spec) && !isGrantTarget(spec) && !isRealEstateTarget(spec)) {
         finalItems = jobPortalDeepLinkSeeds(spec)
           .map((s) => {
             const item = normalizeExtractedItem({
@@ -845,15 +897,33 @@ export class Executor {
           .filter((item) => Boolean(item.url))
           .slice(0, 12);
       }
+      if (finalItems.length === 0 && isRealEstateTarget(spec)) {
+        finalItems = realEstatePortalDeepLinkSeeds(spec)
+          .map((s) => {
+            const item = normalizeExtractedItem({
+              title: s.title,
+              url: s.url,
+              description: s.snippet,
+              summary: s.snippet,
+              score: 60,
+              reason: "Portal real-estate seed (SERP blocked / no deep listings)",
+            });
+            return { ...item, url: item.url ?? s.url, title: item.title ?? s.title };
+          })
+          .filter((item) => Boolean(item.url))
+          .slice(0, 12);
+      }
       progress("filtering", 78, `Fallback SERP — ${finalItems.length} enlaces`);
     }
 
-    // Last resort / coverage merge: ensure portal seeds are present for grant/job agents
+    // Last resort / coverage merge: ensure portal seeds are present for grant/job/real-estate
     // even when a weak SERP item already filled finalItems, or SERP was exhausted.
-    if (isGrantTarget(spec) || isJobTarget(spec)) {
+    if (isGrantTarget(spec) || isJobTarget(spec) || isRealEstateTarget(spec)) {
       const portals = isGrantTarget(spec)
         ? grantPortalDeepLinkSeeds(spec)
-        : jobPortalDeepLinkSeeds(spec);
+        : isRealEstateTarget(spec)
+          ? realEstatePortalDeepLinkSeeds(spec)
+          : jobPortalDeepLinkSeeds(spec);
       if (portals.length > 0 && (finalItems.length === 0 || runSerpExhausted)) {
         const seen = new Set(
           finalItems.map((i) => String(i.url ?? "").toLowerCase()).filter(Boolean)
@@ -1438,13 +1508,18 @@ function engineLabel(id: SearchEngineId): string {
 }
 
 function resolveSearchLocale(spec: AgentSpec): string {
-  const blob = `${spec.prompt} ${spec.filters.criteria} ${spec.search.queries.join(" ")}`;
-  if (/australia|australian|au\b|new zealand|nz\b/i.test(blob)) return "en-AU";
-  if (/spain|españa|español|madrid|barcelona|subvenci[oó]n|convocatoria/i.test(blob) &&
-      !/australia|new zealand|global|international/i.test(blob)) {
+  const blob = `${spec.prompt} ${spec.filters.criteria} ${spec.search.queries.join(" ")} ${spec.name ?? ""}`;
+  if (/australia|australian|\bau\b|new zealand|\bnz\b/i.test(blob)) return "en-AU";
+  // Spain / Catalonia / property portals — prefer Spanish SERP even without the word "España".
+  if (
+    /spain|españa|español|catalu[nñ]a|catalunya|tarragona|barcelona|madrid|valencia|valència|girona|lleida|andaluc|galicia|pened[eè]s|baix\s*camp|alt\s*camp|priorat|comarca|idealista|fotocasa|habitaclia|subvenci[oó]n|convocatoria/i.test(
+      blob
+    ) && !/australia|new zealand/i.test(blob)
+  ) {
     return "es-ES";
   }
-  if (/uk\b|united kingdom|england/i.test(blob)) return "en-GB";
+  if (/\buk\b|united kingdom|england/i.test(blob)) return "en-GB";
+  if (isRealEstateTarget(spec)) return "es-ES";
   return "en-US";
 }
 

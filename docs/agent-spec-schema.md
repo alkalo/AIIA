@@ -15,8 +15,8 @@
     },
     "opportunitySubtype": {
       "type": "string",
-      "enum": ["jobs", "grants", "tenders", "events", "deals", "custom"],
-      "description": "Subtipo para plantilla opportunities: empleo, subvenciones, licitaciones, etc."
+      "enum": ["jobs", "grants", "tenders", "events", "deals", "real_estate", "custom"],
+      "description": "Subtipo para plantilla opportunities: empleo, subvenciones, inmobiliario, etc."
     },
     "search": {
       "type": "object",

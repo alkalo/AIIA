@@ -9,8 +9,8 @@ use crate::ollama::{is_stream_cancelled, ChatStreamEvent};
 
 pub const GEMINI_SITE_ID: &str = "aiia.gemini";
 pub const AI_PROVIDER_SETTING: &str = "ai_provider";
-pub const DEFAULT_GEMINI_FLASH: &str = "gemini-2.5-flash";
-pub const DEFAULT_GEMINI_PRO: &str = "gemini-2.5-pro";
+pub const DEFAULT_GEMINI_FLASH: &str = "gemini-3.6-flash";
+pub const DEFAULT_GEMINI_PRO: &str = "gemini-3.1-pro-preview";
 
 const GEMINI_API: &str = "https://generativelanguage.googleapis.com/v1beta";
 

@@ -61,6 +61,7 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
     "tenders",
     "events",
     "deals",
+    "real_estate",
     "custom",
   ];
 

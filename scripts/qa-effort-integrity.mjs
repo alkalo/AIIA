@@ -27,8 +27,11 @@ if (!i18n.includes('max: "Máx"')) bugs.push("i18n es max");
 if (!chatTsx.includes("chatModel, provider)")) bugs.push("provider lock");
 if (!chatTsx.includes("Mode time budget reached")) bugs.push("budget stop");
 if (geminiModelsForEffort("ultra_high").plannerModel !== GEMINI_PRO) bugs.push("ultra gemini");
-if (geminiModelsForEffort("low").plannerModel !== GEMINI_FLASH) bugs.push("low gemini");
+if (geminiModelsForEffort("low").plannerModel !== GEMINI_PRO) bugs.push("low gemini planner");
+if (geminiModelsForEffort("medium").extractorModel !== GEMINI_FLASH) bugs.push("extractor flash");
 if (defaultLlmTimeoutMs(GEMINI_PRO) !== 300000) bugs.push("pro timeout");
+if (!String(GEMINI_FLASH).includes("3.6")) bugs.push("flash model id");
+if (!String(GEMINI_PRO).includes("3.1-pro")) bugs.push("pro model id");
 
 console.log(bugs.length ? `BUGS: ${bugs.join("; ")}` : "NO_BUGS_FOUND");
 for (const e of ["low", "medium", "high", "super_high", "ultra_high"]) {

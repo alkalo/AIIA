@@ -18,7 +18,14 @@ export interface PromptAttachment {
   extractedText: string;
 }
 
-export type OpportunitySubtype = "jobs" | "grants" | "tenders" | "events" | "deals" | "custom";
+export type OpportunitySubtype =
+  | "jobs"
+  | "grants"
+  | "tenders"
+  | "events"
+  | "deals"
+  | "real_estate"
+  | "custom";
 
 export interface AgentSpec {
   id: string;

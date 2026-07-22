@@ -65,7 +65,7 @@ async function smokeGemini() {
     console.log("SMOKE_SKIP_GEMINI (set GEMINI_API_KEY to enable)");
     return;
   }
-  const model = "gemini-2.5-flash";
+  const model = "gemini-3.6-flash";
   const url = `${GEMINI_API}/models/${model}:generateContent`;
   const res = await fetch(url, {
     method: "POST",
