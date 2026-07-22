@@ -21,7 +21,7 @@ export interface ResearchProfile {
   estimatedMinutes: [number, number];
 }
 
-/** Progressive power ladder; ultra_high hard-capped at 3 hours. */
+/** Progressive power ladder; ultra_high hard-capped at 4 hours. */
 export const RESEARCH_PROFILES: Record<EffortLevel, ResearchProfile> = {
   low: {
     wallClockBudgetSec: 120,
@@ -94,16 +94,16 @@ export const RESEARCH_PROFILES: Record<EffortLevel, ResearchProfile> = {
   ultra_high: {
     // Hard ceiling: 4 hours — deep portal coverage + Playwright fetches
     wallClockBudgetSec: 14400,
-    searchWaves: 40,
+    searchWaves: 48,
     llmPlan: true,
     llmRank: true,
-    llmRankBatchSize: 48,
+    llmRankBatchSize: 56,
     fetchPolicy: "deep",
     extractPolicy: "all_ranked",
-    extractTopK: 200,
+    extractTopK: 280,
     fetchRatio: 1,
     parallelSearch: 2,
-    parallelExtract: 4,
+    parallelExtract: 5,
     gapAnalysis: true,
     useCritic: true,
     reasoningDepth: 3,
@@ -188,7 +188,7 @@ export function shouldStopWaves(startTimeMs: number, profile: ResearchProfile, w
   const elapsed = (Date.now() - startTimeMs) / 1000;
   const ratio = elapsed / profile.wallClockBudgetSec;
   // Ultra/max modes spend almost all budget searching; lighter modes reserve more for extract.
-  const searchBudgetRatio = profile.searchWaves >= 16 ? 0.92 : profile.searchWaves >= 8 ? 0.88 : 0.7;
+  const searchBudgetRatio = profile.searchWaves >= 16 ? 0.95 : profile.searchWaves >= 8 ? 0.9 : 0.7;
   if (ratio >= searchBudgetRatio) return true;
   return waveIndex >= profile.searchWaves;
 }

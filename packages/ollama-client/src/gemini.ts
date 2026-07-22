@@ -33,29 +33,24 @@ export function geminiModelsForEffort(effort: string): {
   extractorModel: string;
   criticModel?: string;
 } {
-  const heavy =
-    effort === "high" ||
-    effort === "super_high" ||
-    effort === "ultra_high" ||
-    effort === "pro" ||
-    effort === "max";
-  // Quality-first: Pro for plan + extract + critic on heavy runs; Flash only for light extract.
+  const light = effort === "low" || effort === "instant";
+  // Quality-first: Pro for plan always; Pro for extract+critic except Instant/low.
   return {
     plannerModel: GEMINI_PRO,
-    extractorModel: heavy ? GEMINI_PRO : GEMINI_FLASH,
-    criticModel: heavy ? GEMINI_PRO : undefined,
+    extractorModel: light ? GEMINI_FLASH : GEMINI_PRO,
+    criticModel: light ? undefined : GEMINI_PRO,
   };
 }
 
-/** Per-call timeout: larger models need longer; Flash/Ollama small = 3 min. */
+/** Per-call timeout: larger models need longer; Pro = 8 min. */
 export function defaultLlmTimeoutMs(model: string): number {
   const m = model.toLowerCase();
-  if (m.includes("gemini") && m.includes("pro")) return 360_000;
-  if (m.includes("gemini")) return 240_000;
-  if (/\b(70b|72b|32b)\b/.test(m)) return 600_000;
-  if (/\b(14b|13b|15b)\b/.test(m)) return 420_000;
-  if (/\b(7b|8b|9b)\b/.test(m)) return 300_000;
-  return 180_000;
+  if (m.includes("gemini") && m.includes("pro")) return 480_000;
+  if (m.includes("gemini")) return 300_000;
+  if (/\b(70b|72b|32b)\b/.test(m)) return 720_000;
+  if (/\b(14b|13b|15b)\b/.test(m)) return 480_000;
+  if (/\b(7b|8b|9b)\b/.test(m)) return 360_000;
+  return 240_000;
 }
 
 function buildGeminiBody(

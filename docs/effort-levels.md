@@ -14,16 +14,16 @@ Applies to **Local (Ollama)** and **Gemini** (user API key). Higher tiers are st
 
 Parámetros canónicos: `packages/ollama-client/src/index.ts` (`EFFORT_CONFIGS`) y `research-profile.ts` (`RESEARCH_PROFILES`).
 
-Gemini: `medium`/`low` → Pro planner + Flash extract; `high`+ → **Pro** para plan, extract y critic.
+Gemini: `medium`/`eficaz`+ → **Pro** plan+extract+critic; Flash solo en Instant/`low` extract.
 
-Inmobiliario / grants: `resolveSearchLimits` aplica un suelo de `maxSources` para que un techo bajo del planner (p. ej. 15) no ahogue ultra/super.
+Inmobiliario / grants: `normalizeAgentSpec` fuerza ≥ `super_high` y ≥ 120 fuentes; `resolveSearchLimits` aplica suelo adicional (hasta 200 en ultra).
 
 ## Chat modes
 
 | Modo | ID | Comportamiento | Gemini |
 |------|-----|----------------|--------|
 | Instantáneo | `instant` | segundos, casi sin web | Flash |
-| Eficaz | `eficaz` | presupuesto ~5–20 min búsqueda + leer páginas | Flash |
+| Eficaz | `eficaz` | presupuesto ~5–20 min búsqueda + leer páginas | Pro |
 | Pro | `pro` | investigación profunda multi-query (~30–75 min) | Pro |
 | Máx | `max` | máxima potencia (tope duro **4 h**) | Pro |
 
@@ -41,4 +41,4 @@ Definidos en `apps/desktop/src/chatModes.ts`; profundidad de motores en `chat.rs
 - **Preview**: siempre `low`
 - **Ejecución programada**: effort del AgentSpec (default `medium`)
 - **ultra_high / Chat max**: tope duro 4 h; en Local conviene HW `high+` (Gemini Pro consume más tokens)
-- **Casas / comarcas**: preferir Gemini + `ultra_high`; deep-links Idealista/Fotocasa se **leen** (Playwright), no solo se listan
+- **Casas / comarcas**: preferir Gemini + `ultra_high`; deep-links Idealista/Fotocasa se **leen** (Playwright), no solo se listan. El normalizer fuerza ≥ `super_high` / 120 fuentes.

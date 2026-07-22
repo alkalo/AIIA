@@ -17,7 +17,7 @@ export const PLANNER_JSON_SHAPE = `{
     "queries": ["search query strings"],
     "sources": [{"type":"duckduckgo"}, {"type":"url","url":"https://..."}, {"type":"rss","url":"https://..."}],
     "requiresLogin": [],
-    "maxSources": 80
+    "maxSources": 120
   },
   "filters": {
     "criteria": "filter criteria description",
@@ -36,7 +36,7 @@ export const PLANNER_JSON_SHAPE = `{
     "onlyWhenRunning": true,
     "timezone": "Europe/Madrid"
   },
-  "effort": "high",
+  "effort": "super_high",
   "retentionDays": 90
 }`;
 
@@ -44,13 +44,13 @@ export const PLANNER_SYSTEM = `You are an expert agent planner for AIIA. Given a
 
 Templates are soft intent categories only — never impose a fixed industry schema. Always tailor queries, schema fields, filters, schedule, and maxSources to what the user actually asked for.
 
-maxSources = how many distinct web links to collect and rank (typical: 8–15 quick scan, 25–40 job search, 80–150 real-estate/grants deep research, 50+ general deep research). Prefer higher values when the user wants exhaustive coverage. Default effort to "high" or above for property / grant searches.
+maxSources = how many distinct web links to collect and rank (typical: 8–15 quick scan, 25–40 job search, 120–200 real-estate/grants deep research, 50+ general deep research). Prefer higher values when the user wants exhaustive coverage. Default effort to "super_high" or "ultra_high" for property / grant searches.
 
 When the goal is job/vacancy hunting (opportunitySubtype jobs): queries MUST target real job postings, not company or profile pages. Use site: operators for job boards relevant to the role and language (e.g. site:linkedin.com/jobs, site:indeed.com, site:glassdoor.com, and for Spanish roles site:infojobs.net, site:tecnoempleo.com, site:computrabajo.com). Include the exact job title in every query. Set maxSources to 25–40. Avoid bare queries like "empleo" or "jobs".
 
 When the goal is grants/funding (opportunitySubtype grants): set output.schema to scope, organization, program_name, description, max_funding, currency, deadline, url, score, reason. Queries MUST target grant listings and official calls — use site: on government portals, EU funding, and grant aggregators relevant to the user's geography. NEVER use LinkedIn/Indeed. Set maxSources to 30–50. Include url or rss sources when the user mentions newsletters or specific grant listing pages. dedupe.fields should be organization and program_name.
 
-When the goal is real estate / property listings (opportunitySubtype real_estate): set output.schema to title, location, price, summary, url, score, reason. Queries MUST be in the user's language for local markets (Spanish for Spain/Catalonia). Use ONLY real portals: site:idealista.com, site:fotocasa.es, site:habitaclia.com, site:milanuncios.com, site:pisos.com, site:yaencontre.com. NEVER invent domains (no realestate.com.au, no fake *.com portals). Include ONE comarca/zone per query (never pack four zones into one string). Set maxSources to 80–150, effort to high / super_high / ultra_high. Prefer deep Idealista/Fotocasa zone URLs as search.sources (not bare homepages).
+When the goal is real estate / property listings (opportunitySubtype real_estate): set output.schema to title, location, price, summary, url, score, reason. Queries MUST be in the user's language for local markets (Spanish for Spain/Catalonia). Use ONLY real portals: site:idealista.com, site:fotocasa.es, site:habitaclia.com, site:milanuncios.com, site:pisos.com, site:yaencontre.com. NEVER invent domains (no realestate.com.au, no fake *.com portals). Include ONE comarca/zone per query (never pack four zones into one string). Set maxSources to 120–200, effort to super_high or ultra_high (prefer ultra_high for multi-comarca / renovation hunts). Prefer deep Idealista/Fotocasa zone URLs as search.sources (not bare homepages).
 
 Output ONLY valid JSON matching this structure:
 ${PLANNER_JSON_SHAPE}`;

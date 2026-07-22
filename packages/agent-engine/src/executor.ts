@@ -155,9 +155,9 @@ function shouldStopForEmptyWaves(
   // If we already have portal seeds / prior hits, ending SERP is fine (coverage continues via fetch).
   if (serpExhausted) return true;
   // Soft-dead SERP: allow more empty waves when we already have seeded coverage.
-  const softDeadThreshold = rankedCount > 0 ? (longMode ? 5 : 3) : longMode ? 3 : 2;
+  const softDeadThreshold = rankedCount > 0 ? (longMode ? 8 : 3) : longMode ? 5 : 2;
   if (emptySerpWaves >= softDeadThreshold) return true;
-  const threshold = rankedCount > 0 ? (longMode ? 6 : 3) : longMode ? 4 : 2;
+  const threshold = rankedCount > 0 ? (longMode ? 10 : 3) : longMode ? 6 : 2;
   if (emptyWaves < threshold) return false;
   return true;
 }

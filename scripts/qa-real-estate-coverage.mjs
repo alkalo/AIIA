@@ -120,6 +120,19 @@ const portals = re.sanitizePortalsList(
 );
 assert.deepEqual(portals.sort(), ["fotocasa.es", "idealista.com"].sort());
 
+const normalize = await import(pathToFileURL(join(engineRoot, "normalize.js")).href);
+const normalized = normalize.normalizeAgentSpec({
+  ...spec,
+  effort: "medium",
+  search: { ...spec.search, maxSources: 15 },
+});
+assert.equal(normalized.opportunitySubtype, "real_estate");
+assert.ok(
+  ["super_high", "ultra_high"].includes(normalized.effort),
+  `expected ≥ super_high, got ${normalized.effort}`
+);
+assert.ok((normalized.search.maxSources ?? 0) >= 120, `expected ≥120 sources, got ${normalized.search.maxSources}`);
+
 // Locale cue: Catalan comarcas without saying España
 const localeBlob = HOUSE_PROMPT;
 assert.match(localeBlob, /alt\s*camp/i);

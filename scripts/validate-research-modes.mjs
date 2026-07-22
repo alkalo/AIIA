@@ -60,8 +60,8 @@ describe("ResearchProfile configs", () => {
     assert.equal(p.useCritic, true);
     assert.equal(p.fetchPolicy, "deep");
     assert.equal(p.reasoningDepth, 3);
-    assert.equal(p.wallClockBudgetSec, 10800);
-    assert.equal(p.estimatedMinutes[1], 180);
+    assert.equal(p.wallClockBudgetSec, 14400);
+    assert.equal(p.estimatedMinutes[1], 240);
   });
 
   it("ladder is strictly stronger on budget", () => {

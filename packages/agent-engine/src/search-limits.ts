@@ -15,10 +15,10 @@ export interface SearchLimits {
 function qualityFloor(spec: AgentSpec, effort: EffortLevel): number {
   const deep = isRealEstateTarget(spec) || isGrantTarget(spec);
   if (!deep) return 0;
-  if (effort === "ultra_high") return 120;
-  if (effort === "super_high") return 80;
-  if (effort === "high") return 50;
-  if (effort === "medium") return 35;
+  if (effort === "ultra_high") return 200;
+  if (effort === "super_high") return 150;
+  if (effort === "high") return 100;
+  if (effort === "medium") return 60;
   return 0;
 }
 

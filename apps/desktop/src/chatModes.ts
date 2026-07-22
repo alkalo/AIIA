@@ -6,7 +6,7 @@ import { GEMINI_FLASH, GEMINI_PRO } from "@aiia/ollama-client/browser";
  * - instant: seconds — answer now, almost no web
  * - eficaz: solid search + reading (budget ~5–20 min)
  * - pro: deep multi-query research (budget ~30–75 min)
- * - max: maximum search power (hard ceiling 3 h of tool loops)
+ * - max: maximum search power (hard ceiling 4 h of tool loops)
  */
 
 export type ChatModeId = "auto" | "instant" | "eficaz" | "pro" | "max";
@@ -98,13 +98,13 @@ ${SEARCH_COVERAGE_RULES}`,
     id: "max",
     temperature: 0.15,
     numCtx: 16384,
-    maxToolHops: 40,
+    maxToolHops: 56,
     wallClockBudgetSec: 14400,
-    searchLimit: 36,
+    searchLimit: 48,
     searchDepth: "max",
-    autoFetchTop: 14,
-    fetchChars: 24000,
-    systemAddon: `MODE: Max (maximum search power — hard ceiling 3 hours of tool work).
+    autoFetchTop: 18,
+    fetchChars: 28000,
+    systemAddon: `MODE: Max (maximum search power — hard ceiling 4 hours of tool work).
 You are a relentless research agent. Exhaust relevant coverage before answering:
 1) Break the goal into sub-questions and coverage criteria (portals, geographies, synonyms).
 2) Run many complementary web_search queries across engines/angles.
@@ -151,8 +151,8 @@ export function ensureSearchCoverageMode(selected: ChatModeId, userMessage: stri
   if (!needsCoverage) return resolved;
   if (selected === "max" || resolved.id === "max") return CHAT_MODES.max;
   if (resolved.id === "pro") return CHAT_MODES.pro;
-  // Property searches benefit from Max-level time when Auto/Instant.
-  if (isRealEstateListingSearch(msg) && selected === "auto") return CHAT_MODES.max;
+  // Property listings always get Max-level time/budget (portals + multi-comarca).
+  if (isRealEstateListingSearch(msg)) return CHAT_MODES.max;
   return CHAT_MODES.pro;
 }
 
@@ -173,7 +173,7 @@ export function loadStoredChatMode(): ChatModeId {
 
 /** Display Gemini model for a selected chat mode (Auto → Flash until send resolves). */
 export function geminiModelForChatMode(mode: ChatModeId): string {
-  if (mode === "pro" || mode === "max") return GEMINI_PRO;
+  if (mode === "eficaz" || mode === "pro" || mode === "max") return GEMINI_PRO;
   return GEMINI_FLASH;
 }
 

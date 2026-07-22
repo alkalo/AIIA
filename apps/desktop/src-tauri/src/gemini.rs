@@ -38,7 +38,9 @@ impl AiProvider {
 
 pub fn gemini_model_for_mode(mode: &str) -> &'static str {
     match mode {
-        "pro" | "max" | "high" | "super_high" | "ultra_high" => DEFAULT_GEMINI_PRO,
+        "eficaz" | "medium" | "pro" | "max" | "high" | "super_high" | "ultra_high" => {
+            DEFAULT_GEMINI_PRO
+        }
         _ => DEFAULT_GEMINI_FLASH,
     }
 }
@@ -206,9 +208,9 @@ pub async fn gemini_chat(
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(if model.to_lowercase().contains("pro") {
-            300
+            480
         } else {
-            180
+            300
         }))
         .build()
         .map_err(|e| e.to_string())?;

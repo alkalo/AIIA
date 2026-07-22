@@ -29,10 +29,13 @@ if (!chatTsx.includes("Mode time budget reached")) bugs.push("budget stop");
 if (geminiModelsForEffort("ultra_high").plannerModel !== GEMINI_PRO) bugs.push("ultra gemini");
 if (geminiModelsForEffort("ultra_high").extractorModel !== GEMINI_PRO) bugs.push("ultra gemini extract");
 if (geminiModelsForEffort("low").plannerModel !== GEMINI_PRO) bugs.push("low gemini planner");
-if (geminiModelsForEffort("medium").extractorModel !== GEMINI_FLASH) bugs.push("extractor flash");
-if (defaultLlmTimeoutMs(GEMINI_PRO) !== 360000) bugs.push("pro timeout");
+if (geminiModelsForEffort("medium").extractorModel !== GEMINI_PRO) bugs.push("medium extract pro");
+if (geminiModelsForEffort("low").extractorModel !== GEMINI_FLASH) bugs.push("low extract flash");
+if (defaultLlmTimeoutMs(GEMINI_PRO) !== 480000) bugs.push("pro timeout");
 if (!String(GEMINI_FLASH).includes("3.6")) bugs.push("flash model id");
 if (!String(GEMINI_PRO).includes("3.1-pro")) bugs.push("pro model id");
+if (!chat.includes("hard ceiling 4 hours")) bugs.push("chat max text 4h");
+if (RESEARCH_PROFILES.ultra_high.searchWaves < 48) bugs.push("ultra waves");
 
 console.log(bugs.length ? `BUGS: ${bugs.join("; ")}` : "NO_BUGS_FOUND");
 for (const e of ["low", "medium", "high", "super_high", "ultra_high"]) {

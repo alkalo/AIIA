@@ -57,9 +57,9 @@ export function normalizeAgentSpec(spec: Partial<AgentSpec> & { id: string }): A
   let maxSources = spec.search?.maxSources;
   const draft = { ...spec, opportunitySubtype } as AgentSpec;
   if (isRealEstateTarget(draft) || opportunitySubtype === "real_estate") {
-    // Property searches need deep coverage — never leave medium + 15 links.
-    effort = atLeastEffort(effort, "high");
-    if (maxSources == null || maxSources < 80) maxSources = Math.max(maxSources ?? 0, 80);
+    // Property searches need deep portal coverage — never leave medium/high + thin link caps.
+    effort = atLeastEffort(effort, "super_high");
+    if (maxSources == null || maxSources < 120) maxSources = Math.max(maxSources ?? 0, 120);
   }
 
   return {
