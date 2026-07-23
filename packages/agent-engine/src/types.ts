@@ -72,10 +72,12 @@ export interface FilterConfig {
 
 export interface OutputConfig {
   schema: string[];
-  destinations: ("inbox" | "excel" | "csv")[];
+  destinations: ("inbox" | "excel" | "csv" | "email")[];
   excelPath?: string;
   excelMode?: "new_file" | "update_same";
   notify?: boolean;
+  /** Optional To: for .eml drafts when destination includes email */
+  emailTo?: string;
 }
 
 export interface ScheduleConfig {

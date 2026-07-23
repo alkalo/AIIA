@@ -1,3 +1,4 @@
+export * from "./newsletter.js";
 export * from "./types.js";
 export * from "./templates.js";
 export * from "./attachments.js";

@@ -328,7 +328,7 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
           <label>{t("spec.destinations")}</label>
           {editable ? (
             <div className="spec-checkboxes">
-              {(["inbox", "excel", "csv"] as const).map((dest) => (
+              {(["inbox", "excel", "csv", "email"] as const).map((dest) => (
                 <label key={dest} className="spec-check">
                   <input
                     type="checkbox"
@@ -365,6 +365,22 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
               />
             ) : (
               <p className="spec-value spec-mono">{safeOutput.excelPath}</p>
+            )}
+          </div>
+        )}
+        {(safeOutput.destinations.includes("email") || safeOutput.emailTo) && (
+          <div className="spec-field">
+            <label>{t("spec.emailTo")}</label>
+            {editable ? (
+              <input
+                className="input"
+                type="email"
+                placeholder="team@example.com"
+                value={safeOutput.emailTo ?? ""}
+                onChange={(e) => updateOutput({ emailTo: e.target.value })}
+              />
+            ) : (
+              <p className="spec-value spec-mono">{safeOutput.emailTo || "—"}</p>
             )}
           </div>
         )}

@@ -137,6 +137,8 @@ pub struct OutputConfig {
     pub excel_mode: ExcelMode,
     #[serde(default)]
     pub notify: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "email_to")]
+    pub email_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -46,3 +46,8 @@
 - E8-S4: Python acotado (timeout)
 - Fuera: plugins, GPT store, cloud
 
+# Epic 9: BFGN Grants & Impact News wrap — **In progress**
+- E9-S1: Newsletter text + `.eml` draft destination (`email`)
+- E9-S2: Example prompt + docs (`docs/examples/bfgn-monthly-wrap-prompt.md`, `e9-bfgn-wrap.md`)
+- E9-S3: (next) multi-lane research + freshness hard filter + optional SMTP
+

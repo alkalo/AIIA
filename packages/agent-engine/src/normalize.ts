@@ -94,6 +94,7 @@ export function normalizeAgentSpec(spec: Partial<AgentSpec> & { id: string }): A
       excelPath: spec.output?.excelPath,
       excelMode: spec.output?.excelMode ?? "update_same",
       notify: spec.output?.notify ?? true,
+      ...(spec.output?.emailTo?.trim() ? { emailTo: spec.output.emailTo.trim() } : {}),
     },
     schedule: {
       intervalMinutes: spec.schedule?.intervalMinutes ?? 1440,

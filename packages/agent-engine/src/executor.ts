@@ -1064,6 +1064,8 @@ export class Executor {
         exportPaths.inboxPath ? `Bandeja: ${exportPaths.inboxPath}` : "",
         exportPaths.csvPath ? `CSV: ${exportPaths.csvPath}` : "",
         exportPaths.excelPath ? `Excel: ${exportPaths.excelPath}` : "",
+        exportPaths.newsletterPath ? `Newsletter: ${exportPaths.newsletterPath}` : "",
+        exportPaths.emailPath ? `Email draft: ${exportPaths.emailPath}` : "",
         exportPaths.reportPath ? `Informe: ${exportPaths.reportPath}` : "",
       ]
         .filter(Boolean)

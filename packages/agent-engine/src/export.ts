@@ -2,6 +2,11 @@ import ExcelJS from "exceljs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AgentSpec, ExtractedItem } from "./types.js";
+import {
+  buildEmlDraft,
+  composeNewsletterWrap,
+  isNewsletterWrapTarget,
+} from "./newsletter.js";
 
 function expandPath(path: string): string {
   const home = process.env.USERPROFILE ?? process.env.HOME ?? "";
@@ -13,6 +18,8 @@ export interface ExportPaths {
   csvPath?: string;
   excelPath?: string;
   reportPath?: string;
+  newsletterPath?: string;
+  emailPath?: string;
 }
 
 export async function exportResults(
@@ -28,10 +35,35 @@ export async function exportResults(
       ? spec.output.schema
       : ["title", "url", "snippet", "score", "reason"];
 
+  const stamp = runId ?? new Date().toISOString().replace(/[:.]/g, "-");
+  const wantWrap =
+    destinations.includes("email") || isNewsletterWrapTarget(spec);
+
+  let wrapBody: string | undefined;
+  if (wantWrap && items.length > 0) {
+    wrapBody = composeNewsletterWrap(items, spec);
+    const wrapDir = join(dataDir, "exports", "newsletters");
+    await mkdir(wrapDir, { recursive: true });
+    paths.newsletterPath = join(wrapDir, `${spec.id}-${stamp}.txt`);
+    await writeFile(paths.newsletterPath, wrapBody, "utf-8");
+  }
+
+  if (destinations.includes("email") && wrapBody) {
+    const emailDir = join(dataDir, "exports", "email-drafts");
+    await mkdir(emailDir, { recursive: true });
+    const month = new Date().toLocaleString("en-AU", { month: "long", year: "numeric" });
+    const eml = buildEmlDraft({
+      subject: `${month} wrap-up: Grants & impact news — ${spec.name}`,
+      body: wrapBody,
+      to: spec.output.emailTo,
+    });
+    paths.emailPath = join(emailDir, `${spec.id}-${stamp}.eml`);
+    await writeFile(paths.emailPath, eml, "utf-8");
+  }
+
   if (destinations.includes("inbox") || items.length > 0) {
     const inboxDir = join(dataDir, "inbox", spec.id);
     await mkdir(inboxDir, { recursive: true });
-    const stamp = runId ?? new Date().toISOString().replace(/[:.]/g, "-");
     paths.inboxPath = join(inboxDir, `${stamp}.json`);
     await writeFile(
       paths.inboxPath,
@@ -44,6 +76,8 @@ export async function exportResults(
           count: items.length,
           schema,
           results: items,
+          newsletterPath: paths.newsletterPath,
+          emailPath: paths.emailPath,
         },
         null,
         2
@@ -63,6 +97,8 @@ export async function exportResults(
             url: i.url,
             score: i.score,
           })),
+          newsletterPath: paths.newsletterPath,
+          emailPath: paths.emailPath,
         },
         null,
         2
