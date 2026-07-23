@@ -18,6 +18,7 @@ import {
   sanitizeFieldValue,
 } from "./result-quality.js";
 import { hasCoverageProvenance } from "./coverage-markers.js";
+import { canonicalUrl, opportunityContentKey } from "./canonical-url.js";
 
 export type ItemKind = "opportunity" | "news" | "other";
 export type OpportunityCategory =
@@ -60,24 +61,15 @@ function blobOf(item: ExtractedItem): string {
 
 /** Normalize URL for fingerprinting (strip tracking params). */
 export function normalizeUrlForFingerprint(url: string): string {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-    for (const key of [...u.searchParams.keys()]) {
-      if (/^(utm_|fbclid|gclid|ref|mc_)/i.test(key)) u.searchParams.delete(key);
-    }
-    u.hostname = u.hostname.replace(/^www\./, "").toLowerCase();
-    let path = u.pathname.replace(/\/+$/, "") || "/";
-    return `${u.protocol}//${u.hostname}${path}${u.search}`;
-  } catch {
-    return url.trim().toLowerCase();
-  }
+  return canonicalUrl(url);
 }
 
 export function itemFingerprint(item: ExtractedItem): string {
   const url = normalizeUrlForFingerprint(
     resolveOpportunityUrl(item as Record<string, unknown>) || str(item.url)
   );
+  const content = opportunityContentKey(item);
+  if (content) return `${url}|${content}`;
   const name = str(item.program_name || item.title || item.headline)
     .toLowerCase()
     .replace(/\s+/g, " ")
@@ -263,15 +255,23 @@ export function shouldExcludeOpportunity(
   const days = daysUntilDeadline(deadline, now);
   if (days != null && days < minDays) return "closing_too_soon";
 
-  // Undated non-rolling: keep concrete official opportunities + coverage seeds as pending.
+  // Undated non-rolling: prefer keeping concrete opportunities for human review
+  // (exhaustive mode) over dropping them — Inbox can reject.
   const rolling =
     /\b(rolling|ongoing|open now|no deadline)\b/i.test(b) ||
     /^rolling$/i.test(str(item.status));
   if (spec.filters?.requireVerification && !deadline && !rolling && !parseDeadline(deadline)) {
     if (coverage) return null;
     if (isDirectGrantUrl(url)) return null;
-    if (hasConcreteFields && !isLowQualityGrantUrl(url)) return null;
     if (hasConcreteFields) return null;
+    // Org + title alone is enough for pending review when URL is not a bare homepage.
+    if (
+      Boolean(str(item.program_name) || str(item.title)) &&
+      Boolean(str(item.organization)) &&
+      !isLowQualityGrantUrl(url)
+    ) {
+      return null;
+    }
     return "unclear_deadline";
   }
 

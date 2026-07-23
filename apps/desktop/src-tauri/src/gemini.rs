@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter};
 use crate::ollama::{is_stream_cancelled, ChatStreamEvent};
 
 pub const GEMINI_SITE_ID: &str = "aiia.gemini";
+pub const BRAVE_SEARCH_SITE_ID: &str = "aiia.brave_search";
 pub const AI_PROVIDER_SETTING: &str = "ai_provider";
 pub const DEFAULT_GEMINI_FLASH: &str = "gemini-3.6-flash";
 pub const DEFAULT_GEMINI_PRO: &str = "gemini-3.1-pro-preview";
@@ -421,6 +422,7 @@ pub async fn test_gemini_api_key(api_key: &str) -> Result<(), String> {
 pub struct AiProviderStatus {
     pub provider: String,
     pub has_gemini_key: bool,
+    pub has_brave_search_key: bool,
 }
 
 #[cfg(test)]

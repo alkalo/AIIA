@@ -291,6 +291,30 @@ pub(crate) fn read_gemini_api_key(db: &Database) -> Result<Option<String>, Strin
     }
 }
 
+pub(crate) fn read_brave_search_api_key(db: &Database) -> Result<Option<String>, String> {
+    let Some(record) = db
+        .get_credential_by_site_id(gemini::BRAVE_SEARCH_SITE_ID)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+    let plain = decrypt_string(&record.encrypted_data).map_err(|e| e.to_string())?;
+    let trimmed = plain.trim().to_string();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed))
+    }
+}
+
+fn provider_status(db: &Database) -> Result<gemini::AiProviderStatus, String> {
+    Ok(gemini::AiProviderStatus {
+        provider: read_ai_provider(db).as_str().to_string(),
+        has_gemini_key: read_gemini_api_key(db)?.is_some(),
+        has_brave_search_key: read_brave_search_api_key(db)?.is_some(),
+    })
+}
+
 fn llm_env_for_runner(db: &Database) -> Result<Vec<(String, String)>, String> {
     let provider = read_ai_provider(db);
     let mut env = vec![("AIIA_LLM_PROVIDER".to_string(), provider.as_str().to_string())];
@@ -301,17 +325,16 @@ fn llm_env_for_runner(db: &Database) -> Result<Vec<(String, String)>, String> {
             })?;
         env.push(("AIIA_GEMINI_API_KEY".to_string(), key));
     }
+    // Optional Brave Search API — improves SERP reliability when set (any provider).
+    if let Some(brave) = read_brave_search_api_key(db)? {
+        env.push(("AIIA_BRAVE_SEARCH_API_KEY".to_string(), brave));
+    }
     Ok(env)
 }
 
 #[tauri::command]
 fn get_ai_provider_status(state: State<'_, AppState>) -> Result<gemini::AiProviderStatus, String> {
-    let provider = read_ai_provider(&state.db);
-    let has_gemini_key = read_gemini_api_key(&state.db)?.is_some();
-    Ok(gemini::AiProviderStatus {
-        provider: provider.as_str().to_string(),
-        has_gemini_key,
-    })
+    provider_status(&state.db)
 }
 
 #[tauri::command]
@@ -327,10 +350,7 @@ fn set_ai_provider(state: State<'_, AppState>, provider: String) -> Result<gemin
         .db
         .set_setting(gemini::AI_PROVIDER_SETTING, parsed.as_str())
         .map_err(|e| e.to_string())?;
-    Ok(gemini::AiProviderStatus {
-        provider: parsed.as_str().to_string(),
-        has_gemini_key: read_gemini_api_key(&state.db)?.is_some(),
-    })
+    provider_status(&state.db)
 }
 
 #[tauri::command]
@@ -344,11 +364,7 @@ fn set_gemini_api_key(state: State<'_, AppState>, api_key: String) -> Result<gem
         .db
         .upsert_credential(gemini::GEMINI_SITE_ID, "Gemini API key", &encrypted, None, false)
         .map_err(|e| e.to_string())?;
-    let provider = read_ai_provider(&state.db);
-    Ok(gemini::AiProviderStatus {
-        provider: provider.as_str().to_string(),
-        has_gemini_key: true,
-    })
+    provider_status(&state.db)
 }
 
 #[tauri::command]
@@ -364,10 +380,83 @@ fn clear_gemini_api_key(state: State<'_, AppState>) -> Result<gemini::AiProvider
             .set_setting(gemini::AI_PROVIDER_SETTING, gemini::AiProvider::Local.as_str())
             .map_err(|e| e.to_string())?;
     }
-    Ok(gemini::AiProviderStatus {
-        provider: gemini::AiProvider::Local.as_str().to_string(),
-        has_gemini_key: false,
-    })
+    provider_status(&state.db)
+}
+
+#[tauri::command]
+fn set_brave_search_api_key(
+    state: State<'_, AppState>,
+    api_key: String,
+) -> Result<gemini::AiProviderStatus, String> {
+    let trimmed = api_key.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("La API key de Brave Search no puede estar vacía".to_string());
+    }
+    let encrypted = encrypt_string(&trimmed).map_err(|e| e.to_string())?;
+    state
+        .db
+        .upsert_credential(
+            gemini::BRAVE_SEARCH_SITE_ID,
+            "Brave Search API key",
+            &encrypted,
+            None,
+            false,
+        )
+        .map_err(|e| e.to_string())?;
+    provider_status(&state.db)
+}
+
+#[tauri::command]
+fn clear_brave_search_api_key(
+    state: State<'_, AppState>,
+) -> Result<gemini::AiProviderStatus, String> {
+    let _ = state
+        .db
+        .delete_credential_by_site_id(gemini::BRAVE_SEARCH_SITE_ID)
+        .map_err(|e| e.to_string())?;
+    provider_status(&state.db)
+}
+
+#[tauri::command]
+async fn test_brave_search_api_key(
+    state: State<'_, AppState>,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    let key = match api_key {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => read_brave_search_api_key(&state.db)?
+            .ok_or_else(|| "No hay API key de Brave Search guardada".to_string())?,
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let res = client
+        .get("https://api.search.brave.com/res/v1/web/search")
+        .query(&[("q", "community grant"), ("count", "1")])
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", &key)
+        .send()
+        .await
+        .map_err(|e| format!("No se pudo contactar Brave Search: {e}"))?;
+    let status = res.status().as_u16();
+    if status == 401 || status == 403 {
+        return Err(
+            "Brave Search rechazó la API key. Revisa la clave en Ajustes (api.search.brave.com)."
+                .to_string(),
+        );
+    }
+    if status == 429 {
+        return Err(
+            "Cuota de Brave Search agotada o demasiadas peticiones. Espera un momento.".to_string(),
+        );
+    }
+    if !res.status().is_success() {
+        let body = res.text().await.unwrap_or_default();
+        let truncated: String = body.chars().take(200).collect();
+        return Err(format!("Brave Search error HTTP {status}: {truncated}"));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -590,14 +679,17 @@ fn get_chat_system_prompt(mode_addon: Option<String>) -> String {
 
 #[tauri::command]
 async fn chat_web_search(
+    state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
     depth: Option<String>,
 ) -> Result<Vec<chat::WebSearchHit>, String> {
+    let brave = read_brave_search_api_key(&state.db)?;
     chat::web_search_with_depth(
         &query,
         limit.unwrap_or(8),
         depth.as_deref().unwrap_or("eficaz"),
+        brave.as_deref(),
     )
     .await
 }
@@ -1088,7 +1180,7 @@ fn list_credentials(state: State<AppState>) -> Result<Vec<CredentialSummary>, St
     let creds = state.db.list_credentials().map_err(|e| e.to_string())?;
     Ok(creds
         .into_iter()
-        .filter(|c| c.site_id != gemini::GEMINI_SITE_ID)
+        .filter(|c| c.site_id != gemini::GEMINI_SITE_ID && c.site_id != gemini::BRAVE_SEARCH_SITE_ID)
         .map(|c| CredentialSummary {
             id: c.id,
             site_id: c.site_id,
@@ -2852,6 +2944,244 @@ fn get_latest_newsletter(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RunReportDto {
+    path: String,
+    agent_id: String,
+    run_id: Option<String>,
+    count: Option<i64>,
+    source_health: Option<String>,
+    region_coverage: Option<Vec<String>>,
+    region_gaps: Option<Vec<String>>,
+    serp_exhausted: Option<bool>,
+    listing_expand_count: Option<i64>,
+    depth2_count: Option<i64>,
+    feed_item_count: Option<i64>,
+    seed_count: Option<i64>,
+    gap_fill_count: Option<i64>,
+    serp_engine_hits: Option<std::collections::HashMap<String, i64>>,
+    feed_skipped_count: Option<i64>,
+    feed_fail_count: Option<i64>,
+    origin_counts: Option<std::collections::HashMap<String, i64>>,
+    updated_at_ms: u64,
+}
+
+#[tauri::command]
+fn get_latest_run_report(
+    state: State<'_, AppState>,
+    agent_id: String,
+    run_id: Option<String>,
+) -> Result<Option<RunReportDto>, String> {
+    let dir = state.data_dir.join("inbox").join(&agent_id);
+    if !dir.exists() {
+        return Ok(None);
+    }
+
+    // Prefer exact run report when run_id is provided.
+    if let Some(rid) = run_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let exact = dir.join(format!("{rid}-report.json"));
+        if exact.exists() {
+            return parse_run_report_file(&exact, &agent_id);
+        }
+    }
+
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !name.ends_with("-report.json") {
+            continue;
+        }
+        let meta = entry.metadata().map_err(|e| e.to_string())?;
+        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+            best = Some((modified, path));
+        }
+    }
+    let Some((_modified, path)) = best else {
+        return Ok(None);
+    };
+    parse_run_report_file(&path, &agent_id)
+}
+
+fn parse_run_report_file(path: &PathBuf, agent_id: &str) -> Result<Option<RunReportDto>, String> {
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("Invalid run report JSON: {e}"))?;
+    let updated_at_ms = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Ok(Some(RunReportDto {
+        path: path.to_string_lossy().to_string(),
+        agent_id: agent_id.to_string(),
+        run_id: v.get("runId").and_then(|x| x.as_str()).map(|s| s.to_string()),
+        count: v.get("count").and_then(|x| x.as_i64()),
+        source_health: v
+            .get("sourceHealth")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string()),
+        region_coverage: v.get("regionCoverage").and_then(|x| {
+            x.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|i| i.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+        }),
+        region_gaps: v.get("regionGaps").and_then(|x| {
+            x.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|i| i.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+        }),
+        serp_exhausted: v.get("serpExhausted").and_then(|x| x.as_bool()),
+        listing_expand_count: v.get("listingExpandCount").and_then(|x| x.as_i64()),
+        depth2_count: v.get("depth2Count").and_then(|x| x.as_i64()),
+        feed_item_count: v.get("feedItemCount").and_then(|x| x.as_i64()),
+        seed_count: v.get("seedCount").and_then(|x| x.as_i64()),
+        gap_fill_count: v.get("gapFillCount").and_then(|x| x.as_i64()),
+        serp_engine_hits: v.get("serpEngineHits").and_then(|x| {
+            x.as_object().map(|obj| {
+                obj
+                    .iter()
+                    .filter_map(|(k, val)| val.as_i64().map(|n| (k.clone(), n)))
+                    .collect()
+            })
+        }),
+        feed_skipped_count: v.get("feedSkippedCount").and_then(|x| x.as_i64()),
+        feed_fail_count: v.get("feedFailCount").and_then(|x| x.as_i64()),
+        origin_counts: v.get("originCounts").and_then(|x| {
+            x.as_object().map(|obj| {
+                obj
+                    .iter()
+                    .filter_map(|(k, val)| val.as_i64().map(|n| (k.clone(), n)))
+                    .collect()
+            })
+        }),
+        updated_at_ms,
+    }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthHistoryEntryDto {
+    at: String,
+    run_id: Option<String>,
+    final_count: i64,
+    serp_exhausted: bool,
+    seed_count: i64,
+    feed_item_count: i64,
+    listing_expand_count: i64,
+    depth2_count: i64,
+    page_fetch_ok: i64,
+    page_fetch_fail: i64,
+    region_gaps: Option<Vec<String>>,
+    gap_fill_count: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthHistoryDto {
+    agent_id: String,
+    trend: String,
+    entries: Vec<HealthHistoryEntryDto>,
+}
+
+#[tauri::command]
+fn get_health_history(
+    state: State<'_, AppState>,
+    agent_id: String,
+    limit: Option<u32>,
+) -> Result<HealthHistoryDto, String> {
+    let path = state
+        .data_dir
+        .join("inbox")
+        .join(&agent_id)
+        .join("health-history.json");
+    let lim = limit.unwrap_or(10).clamp(1, 20) as usize;
+    if !path.exists() {
+        return Ok(HealthHistoryDto {
+            agent_id,
+            trend: String::new(),
+            entries: vec![],
+        });
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("Invalid health history JSON: {e}"))?;
+    let arr = v
+        .get("entries")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let start = arr.len().saturating_sub(lim);
+    let entries: Vec<HealthHistoryEntryDto> = arr[start..]
+        .iter()
+        .filter_map(|e| {
+            Some(HealthHistoryEntryDto {
+                at: e.get("at")?.as_str()?.to_string(),
+                run_id: e
+                    .get("runId")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string()),
+                final_count: e.get("finalCount").and_then(|x| x.as_i64()).unwrap_or(0),
+                serp_exhausted: e
+                    .get("serpExhausted")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false),
+                seed_count: e.get("seedCount").and_then(|x| x.as_i64()).unwrap_or(0),
+                feed_item_count: e.get("feedItemCount").and_then(|x| x.as_i64()).unwrap_or(0),
+                listing_expand_count: e
+                    .get("listingExpandCount")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(0),
+                depth2_count: e.get("depth2Count").and_then(|x| x.as_i64()).unwrap_or(0),
+                page_fetch_ok: e.get("pageFetchOk").and_then(|x| x.as_i64()).unwrap_or(0),
+                page_fetch_fail: e.get("pageFetchFail").and_then(|x| x.as_i64()).unwrap_or(0),
+                region_gaps: e.get("regionGaps").and_then(|x| {
+                    x.as_array().map(|arr| {
+                        arr.iter()
+                            .filter_map(|i| i.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                }),
+                gap_fill_count: e.get("gapFillCount").and_then(|x| x.as_i64()),
+            })
+        })
+        .collect();
+
+    let trend = entries
+        .iter()
+        .map(|e| {
+            let day = e.at.get(..10).unwrap_or(&e.at);
+            let gaps = e
+                .region_gaps
+                .as_ref()
+                .map(|g| {
+                    if g.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" gaps:{}", g.len())
+                    }
+                })
+                .unwrap_or_default();
+            let serp = if e.serp_exhausted { " SERP↓" } else { "" };
+            format!("{day}: {}{serp}{gaps}", e.final_count)
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+
+    Ok(HealthHistoryDto {
+        agent_id,
+        trend,
+        entries,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RunProgressDto {
     phase: String,
     percent: u32,
@@ -3111,6 +3441,9 @@ pub fn run() {
             set_gemini_api_key,
             clear_gemini_api_key,
             test_gemini_api_key,
+            set_brave_search_api_key,
+            clear_brave_search_api_key,
+            test_brave_search_api_key,
             create_chat,
             list_chats,
             get_chat,
@@ -3162,6 +3495,8 @@ pub fn run() {
             open_path,
             open_url,
             get_latest_newsletter,
+            get_latest_run_report,
+            get_health_history,
             get_cloud_status,
             set_cloud_config,
             push_agent_to_cloud,

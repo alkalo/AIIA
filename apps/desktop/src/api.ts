@@ -156,6 +156,7 @@ export type AiProviderId = "local" | "gemini";
 export interface AiProviderStatus {
   provider: AiProviderId | string;
   hasGeminiKey: boolean;
+  hasBraveSearchKey?: boolean;
 }
 
 export const api = {
@@ -238,6 +239,46 @@ export const api = {
       "get_latest_newsletter",
       { agentId }
     ),
+  getLatestRunReport: (agentId: string, runId?: string) =>
+    invoke<{
+      path: string;
+      agentId: string;
+      runId?: string;
+      count?: number;
+      sourceHealth?: string;
+      regionCoverage?: string[];
+      regionGaps?: string[];
+      serpExhausted?: boolean;
+      listingExpandCount?: number;
+      depth2Count?: number;
+      feedItemCount?: number;
+      seedCount?: number;
+      gapFillCount?: number;
+      serpEngineHits?: Record<string, number>;
+      feedSkippedCount?: number;
+      feedFailCount?: number;
+      originCounts?: Record<string, number>;
+      updatedAtMs: number;
+    } | null>("get_latest_run_report", { agentId, runId: runId ?? null }),
+  getHealthHistory: (agentId: string, limit?: number) =>
+    invoke<{
+      agentId: string;
+      trend: string;
+      entries: Array<{
+        at: string;
+        runId?: string;
+        finalCount: number;
+        serpExhausted: boolean;
+        seedCount: number;
+        feedItemCount: number;
+        listingExpandCount: number;
+        depth2Count: number;
+        pageFetchOk: number;
+        pageFetchFail: number;
+        regionGaps?: string[];
+        gapFillCount?: number;
+      }>;
+    }>("get_health_history", { agentId, limit: limit ?? 10 }),
   getCloudStatus: () =>
     invoke<{ configured: boolean; baseUrl: string; lastSyncAt?: string | null }>("get_cloud_status"),
   setCloudConfig: (baseUrl: string, token: string) =>
@@ -362,6 +403,11 @@ export const api = {
   clearGeminiApiKey: () => invoke<AiProviderStatus>("clear_gemini_api_key"),
   testGeminiApiKey: (apiKey?: string) =>
     invoke("test_gemini_api_key", { apiKey: apiKey ?? null }),
+  setBraveSearchApiKey: (apiKey: string) =>
+    invoke<AiProviderStatus>("set_brave_search_api_key", { apiKey }),
+  clearBraveSearchApiKey: () => invoke<AiProviderStatus>("clear_brave_search_api_key"),
+  testBraveSearchApiKey: (apiKey?: string) =>
+    invoke("test_brave_search_api_key", { apiKey: apiKey ?? null }),
   cancelChatStream: (streamId: string) =>
     invoke("cancel_chat_stream", { streamId }),
 };

@@ -17,7 +17,7 @@ pub struct WebSearchHit {
 }
 
 pub async fn web_search(query: &str, limit: usize) -> Result<Vec<WebSearchHit>, String> {
-    web_search_with_depth(query, limit, "eficaz").await
+    web_search_with_depth(query, limit, "eficaz", None).await
 }
 
 /// Approximate calendar year from UNIX time (good enough for search query hints).
@@ -301,10 +301,19 @@ async fn search_engines_for_depth(
     query: &str,
     limit: usize,
     depth: &str,
+    brave_api_key: Option<&str>,
 ) -> Vec<WebSearchHit> {
     let mut all = Vec::new();
     match depth {
         "instant" => {
+            if let Some(key) = brave_api_key {
+                if let Ok(hits) = search_brave_api(client, query, limit, key).await {
+                    if !hits.is_empty() {
+                        all.extend(hits);
+                        return all;
+                    }
+                }
+            }
             if let Ok(hits) = search_ddg(client, query, limit).await {
                 all.extend(hits);
             }
@@ -313,7 +322,7 @@ async fn search_engines_for_depth(
             let (a, b, c, d) = tokio::join!(
                 search_ddg(client, query, limit),
                 search_bing(client, query, limit),
-                search_brave(client, query, limit),
+                search_brave(client, query, limit, brave_api_key),
                 search_mojeek(client, query, limit),
             );
             for r in [a, b, c, d] {
@@ -323,7 +332,14 @@ async fn search_engines_for_depth(
             }
         }
         _ => {
-            // eficaz: multi-engine (not just DDG+Bing)
+            // eficaz: prefer Brave API when available, else multi-engine HTML
+            if let Some(key) = brave_api_key {
+                if let Ok(hits) = search_brave_api(client, query, limit, key).await {
+                    if !hits.is_empty() {
+                        all.extend(hits);
+                    }
+                }
+            }
             let (a, b, c) = tokio::join!(
                 search_ddg(client, query, limit),
                 search_bing(client, query, limit),
@@ -344,6 +360,7 @@ pub async fn web_search_with_depth(
     query: &str,
     limit: usize,
     depth: &str,
+    brave_api_key: Option<&str>,
 ) -> Result<Vec<WebSearchHit>, String> {
     let opp = looks_like_opportunity_search(query);
     // Opportunity searches already have portal seeds — keep SERP short so the UI isn't stuck.
@@ -355,7 +372,7 @@ pub async fn web_search_with_depth(
     let client = reqwest::Client::builder()
         .timeout(http_timeout)
         .user_agent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         )
         .build()
         .map_err(|e| e.to_string())?;
@@ -401,7 +418,7 @@ pub async fn web_search_with_depth(
         } else {
             depth
         };
-        for h in search_engines_for_depth(&client, &q, limit, engine_depth).await {
+        for h in search_engines_for_depth(&client, &q, limit, engine_depth, brave_api_key).await {
             if !is_usable_hit(&h.url, &h.title) {
                 continue;
             }
@@ -433,7 +450,7 @@ pub async fn web_search_with_depth(
             format!("{query} site:linkedin.com/jobs"),
         ];
         for q in fallbacks {
-            for h in search_engines_for_depth(&client, &q, limit, "pro").await {
+            for h in search_engines_for_depth(&client, &q, limit, "pro", brave_api_key).await {
                 if !is_usable_hit(&h.url, &h.title) {
                     continue;
                 }
@@ -568,7 +585,15 @@ async fn search_brave(
     client: &reqwest::Client,
     query: &str,
     limit: usize,
+    api_key: Option<&str>,
 ) -> Result<Vec<WebSearchHit>, String> {
+    if let Some(key) = api_key {
+        if let Ok(hits) = search_brave_api(client, query, limit, key).await {
+            if !hits.is_empty() {
+                return Ok(hits);
+            }
+        }
+    }
     let url = format!(
         "https://search.brave.com/search?q={}",
         urlencoding_encode(query)
@@ -579,6 +604,73 @@ async fn search_brave(
     }
     let html = res.text().await.map_err(|e| e.to_string())?;
     Ok(parse_brave_html(&html, limit))
+}
+
+async fn search_brave_api(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+    api_key: &str,
+) -> Result<Vec<WebSearchHit>, String> {
+    let count = limit.clamp(1, 20);
+    let url = format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+        urlencoding_encode(query),
+        count
+    );
+    let res = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", api_key)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status().as_u16();
+    if status == 401 || status == 403 {
+        return Err("Brave API unauthorized".to_string());
+    }
+    if !res.status().is_success() {
+        return Err(format!("Brave API HTTP {status}"));
+    }
+    let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    let mut hits = Vec::new();
+    if let Some(arr) = body
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array())
+    {
+        for item in arr {
+            let title = item
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let url = item
+                .get("url")
+                .and_then(|u| u.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let snippet = item
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if title.len() >= 2 && url.starts_with("http") {
+                hits.push(WebSearchHit {
+                    title,
+                    url,
+                    snippet,
+                });
+            }
+            if hits.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(hits)
 }
 
 #[allow(dead_code)]
@@ -1233,6 +1325,7 @@ mod tests {
             "Busca en la web ofertas QA Lead remoto en España",
             12,
             "pro",
+            None,
         )
         .await
         .expect("search");

@@ -6,6 +6,7 @@ import { coerceJsonArray } from "./json-utils.js";
 import { isGrantTarget, isCurationOpportunityTarget, isRealEstateTarget } from "./opportunity-subtype.js";
 import { isDirectGrantUrl, isLowQualityGrantUrl } from "./result-quality.js";
 import { isBarePortalHomepage, isRelevantRealEstateHit } from "./real-estate-sources.js";
+import { canonicalUrl } from "./canonical-url.js";
 
 export type FetchPriority = "high" | "medium" | "skip";
 
@@ -191,12 +192,60 @@ export function sourcesToFetch(
   return ranked.filter((r) => r.fetchPriority !== "skip").slice(0, fetchLimit);
 }
 
-function normalizeUrlKey(url: string): string {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-    return u.toString().replace(/\/$/, "").toLowerCase();
-  } catch {
-    return url.trim().toLowerCase();
+/**
+ * Prefer geographic diversity when picking pages to fetch (round-robin by region).
+ * Keeps high-priority portal seeds first, then fills remaining slots across regions.
+ */
+export function sourcesToFetchDiverse(
+  ranked: RankedSource[],
+  fetchLimit: number,
+  regionOf: (url: string) => string
+): RankedSource[] {
+  const eligible = ranked.filter((r) => r.fetchPriority !== "skip");
+  if (eligible.length <= fetchLimit) return eligible;
+
+  const portals = eligible.filter((r) => /portal seed|rss feed|listing pagination/i.test(
+    `${r.snippet ?? ""} ${r.rankReason ?? ""}`
+  ));
+  const rest = eligible.filter((r) => !portals.includes(r));
+
+  const out: RankedSource[] = [];
+  const seen = new Set<string>();
+  const push = (r: RankedSource) => {
+    const key = normalizeUrlKey(r.url);
+    if (seen.has(key) || out.length >= fetchLimit) return;
+    seen.add(key);
+    out.push(r);
+  };
+
+  for (const p of portals) push(p);
+
+  const byRegion = new Map<string, RankedSource[]>();
+  for (const r of rest) {
+    const reg = regionOf(r.url) || "unknown";
+    const list = byRegion.get(reg) ?? [];
+    list.push(r);
+    byRegion.set(reg, list);
   }
+  const queues = [...byRegion.values()];
+  let idx = 0;
+  let guard = 0;
+  while (out.length < fetchLimit && queues.some((q) => q.length > 0) && guard < 5000) {
+    guard += 1;
+    const q = queues[idx % queues.length];
+    idx += 1;
+    const next = q.shift();
+    if (next) push(next);
+  }
+
+  // Fill any remaining from original eligible order
+  for (const r of eligible) {
+    if (out.length >= fetchLimit) break;
+    push(r);
+  }
+  return out;
+}
+
+function normalizeUrlKey(url: string): string {
+  return canonicalUrl(url) || url.trim().toLowerCase();
 }

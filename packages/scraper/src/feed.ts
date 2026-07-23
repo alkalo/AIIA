@@ -65,11 +65,57 @@ function parseFeedXml(xml: string): FeedItem[] {
   return items;
 }
 
+/** Grants.gov OpportunitiesAvailable.xml / OpportunitySynopsisDetail style. */
+function parseGrantsGovXml(xml: string): FeedItem[] {
+  const items: FeedItem[] = [];
+  const blocks = [
+    ...xml.matchAll(
+      /<OpportunitySynopsisDetail_1_0\b[^>]*>([\s\S]*?)<\/OpportunitySynopsisDetail_1_0>/gi
+    ),
+    ...xml.matchAll(/<OpportunityDetail\b[^>]*>([\s\S]*?)<\/OpportunityDetail>/gi),
+  ];
+  for (const match of blocks) {
+    const block = match[1];
+    const id =
+      extractTag(block, "OpportunityID") ||
+      extractTag(block, "OpportunityNumber") ||
+      extractTag(block, "OpportunityID");
+    const title =
+      extractTag(block, "OpportunityTitle") ||
+      extractTag(block, "Title") ||
+      extractTag(block, "opportunityTitle");
+    const agency =
+      extractTag(block, "AgencyName") ||
+      extractTag(block, "OwningAgencyCode") ||
+      extractTag(block, "AgencyCode");
+    const close =
+      extractTag(block, "CloseDate") ||
+      extractTag(block, "ArchiveDate") ||
+      extractTag(block, "PostDate");
+    const desc =
+      extractTag(block, "Description") ||
+      extractTag(block, "Synopsis") ||
+      extractTag(block, "AdditionalInformationOnEligibility");
+    if (!title && !id) continue;
+    const url = id
+      ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(id)}`
+      : "";
+    if (!url) continue;
+    items.push({
+      title: title || `Grants.gov ${id}`,
+      url,
+      snippet: [agency, close ? `Close: ${close}` : "", desc].filter(Boolean).join(" — ").slice(0, 500),
+      publishedAt: close || undefined,
+    });
+  }
+  return items;
+}
+
 export async function fetchFeed(url: string, limit = 30): Promise<FeedItem[]> {
   const res = await fetch(url, {
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     },
     signal: AbortSignal.timeout(30000),
@@ -78,16 +124,18 @@ export async function fetchFeed(url: string, limit = 30): Promise<FeedItem[]> {
     throw new Error(`Feed fetch failed (${res.status}): ${url}`);
   }
   const xml = await res.text();
-  return parseFeedXml(xml)
-    .filter((item) => item.url)
-    .slice(0, limit);
+  let items = parseFeedXml(xml);
+  if (items.length === 0 && /OpportunitySynopsis|OpportunityDetail|grants\.gov/i.test(xml + url)) {
+    items = parseGrantsGovXml(xml);
+  }
+  return items.filter((item) => item.url).slice(0, limit);
 }
 
 export async function fetchUrlAsSnippet(url: string): Promise<FeedItem> {
   const res = await fetch(url, {
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     },
     signal: AbortSignal.timeout(30000),
   });

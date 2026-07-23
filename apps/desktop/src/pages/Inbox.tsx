@@ -40,6 +40,28 @@ export function Inbox() {
   const [wrapReviewed, setWrapReviewed] = useState(false);
   const [wrapCopied, setWrapCopied] = useState(false);
   const [wrapLoading, setWrapLoading] = useState(false);
+  const [runReport, setRunReport] = useState<{
+    path: string;
+    agentId: string;
+    runId?: string;
+    count?: number;
+    sourceHealth?: string;
+    regionCoverage?: string[];
+    regionGaps?: string[];
+    serpExhausted?: boolean;
+    listingExpandCount?: number;
+    depth2Count?: number;
+    feedItemCount?: number;
+    seedCount?: number;
+    gapFillCount?: number;
+    serpEngineHits?: Record<string, number>;
+    feedSkippedCount?: number;
+    feedFailCount?: number;
+    originCounts?: Record<string, number>;
+    updatedAtMs: number;
+  } | null>(null);
+  const [runReportLoading, setRunReportLoading] = useState(false);
+  const [healthTrend, setHealthTrend] = useState("");
 
   const lang = i18n.language.startsWith("es") ? "es" : "en";
 
@@ -91,6 +113,28 @@ export function Inbox() {
     }
   }, [filterAgent]);
 
+  const loadRunReport = useCallback(async () => {
+    if (!filterAgent) {
+      setRunReport(null);
+      setHealthTrend("");
+      return;
+    }
+    setRunReportLoading(true);
+    try {
+      const [report, hist] = await Promise.all([
+        api.getLatestRunReport(filterAgent),
+        api.getHealthHistory(filterAgent, 8),
+      ]);
+      setRunReport(report);
+      setHealthTrend(hist.trend || "");
+    } catch {
+      setRunReport(null);
+      setHealthTrend("");
+    } finally {
+      setRunReportLoading(false);
+    }
+  }, [filterAgent]);
+
   useEffect(() => {
     refresh();
   }, [refresh]);
@@ -98,6 +142,10 @@ export function Inbox() {
   useEffect(() => {
     void loadWrap();
   }, [loadWrap]);
+
+  useEffect(() => {
+    void loadRunReport();
+  }, [loadRunReport]);
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
@@ -109,14 +157,17 @@ export function Inbox() {
           .catch((e) => console.warn("Inbox sync on complete failed", e))
           .finally(() => {
             void refresh();
-            if (!filterAgent || filterAgent === agentId) void loadWrap();
+            if (!filterAgent || filterAgent === agentId) {
+              void loadWrap();
+              void loadRunReport();
+            }
           });
       } else {
         void refresh();
       }
     }).then((fn) => unsubs.push(fn));
     return () => unsubs.forEach((fn) => fn());
-  }, [refresh, loadWrap, filterAgent]);
+  }, [refresh, loadWrap, loadRunReport, filterAgent]);
 
   const visibleResults = useMemo(() => {
     let list = results;
@@ -406,6 +457,177 @@ export function Inbox() {
           )}
         </div>
       </div>
+
+      {filterAgent && (
+        <section
+          className="inbox-run-health"
+          style={{
+            marginBottom: "1.25rem",
+            padding: "0.85rem 1rem",
+            border: "1px solid var(--border, #ddd)",
+            borderRadius: 8,
+            background: "var(--surface-2, #f7f7f5)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 0.35rem", fontSize: "1rem" }}>{t("inbox.runHealthTitle")}</h3>
+          <p className="hint-text" style={{ marginTop: 0 }}>
+            {t("inbox.runHealthHint")}
+          </p>
+          {runReportLoading ? (
+            <p>{t("common.loading")}</p>
+          ) : runReport ? (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "0.5rem 1rem",
+                  marginBottom: "0.5rem",
+                  fontSize: "0.9rem",
+                }}
+              >
+                {typeof runReport.count === "number" && (
+                  <span>{t("inbox.count", { count: runReport.count })}</span>
+                )}
+                {typeof runReport.seedCount === "number" && (
+                  <span>Seeds: {runReport.seedCount}</span>
+                )}
+                {typeof runReport.feedItemCount === "number" && (
+                  <span>RSS: {runReport.feedItemCount}</span>
+                )}
+                {typeof runReport.feedSkippedCount === "number" && runReport.feedSkippedCount > 0 && (
+                  <span>
+                    {t("inbox.runHealthFeedCooldown")}: {runReport.feedSkippedCount}
+                  </span>
+                )}
+                {typeof runReport.feedFailCount === "number" && runReport.feedFailCount > 0 && (
+                  <span>
+                    {t("inbox.runHealthFeedFail")}: {runReport.feedFailCount}
+                  </span>
+                )}
+                {typeof runReport.listingExpandCount === "number" && (
+                  <span>Expand: {runReport.listingExpandCount}</span>
+                )}
+                {typeof runReport.depth2Count === "number" && (
+                  <span>Depth-2: {runReport.depth2Count}</span>
+                )}
+                {typeof runReport.gapFillCount === "number" && runReport.gapFillCount > 0 && (
+                  <span>
+                    {t("inbox.runHealthGapFill")}: {runReport.gapFillCount}
+                  </span>
+                )}
+                {runReport.serpEngineHits &&
+                  Object.keys(runReport.serpEngineHits).length > 0 && (
+                    <span>
+                      {t("inbox.runHealthSerp")}:{" "}
+                      {Object.entries(runReport.serpEngineHits)
+                        .filter(([, n]) => n > 0)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([e, n]) => {
+                          const label =
+                            e === "brave-api"
+                              ? "Brave API"
+                              : e === "brave"
+                                ? "Brave HTML"
+                                : e === "duckduckgo-html"
+                                  ? "DDG"
+                                  : e === "duckduckgo-lite"
+                                    ? "DDG-Lite"
+                                    : e;
+                          return `${label}:${n}`;
+                        })
+                        .join(" · ")}
+                    </span>
+                  )}
+                {runReport.originCounts &&
+                  Object.keys(runReport.originCounts).length > 0 && (
+                    <span>
+                      {t("inbox.runHealthOrigin")}:{" "}
+                      {Object.entries(runReport.originCounts)
+                        .filter(([, n]) => n > 0)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([e, n]) => {
+                          const label =
+                            e === "portal-seed"
+                              ? "Seeds"
+                              : e === "listing-expand"
+                                ? "Expand"
+                                : e === "gap-fill"
+                                  ? "Gap-fill"
+                                  : e === "depth-2"
+                                    ? "Depth-2"
+                                    : e === "rss"
+                                      ? "RSS"
+                                      : e === "serp"
+                                        ? "SERP"
+                                        : e === "other"
+                                          ? "Other"
+                                          : e;
+                          return `${label}:${n}`;
+                        })
+                        .join(" · ")}
+                    </span>
+                  )}
+                {runReport.serpExhausted && (
+                  <span style={{ color: "var(--danger, #b42318)", fontWeight: 600 }}>
+                    {t("inbox.runHealthSerpBlocked")}
+                  </span>
+                )}
+              </div>
+              {healthTrend && (
+                <p className="hint-text" style={{ margin: "0.35rem 0 0" }}>
+                  {t("inbox.runHealthTrend")}: {healthTrend}
+                </p>
+              )}
+              {runReport.regionGaps && runReport.regionGaps.length > 0 && (
+                <p className="hint-text" style={{ margin: "0.25rem 0" }}>
+                  {t("inbox.runHealthGaps")}: {runReport.regionGaps.join(", ")}
+                </p>
+              )}
+              {runReport.sourceHealth && (
+                <pre
+                  style={{
+                    margin: "0.5rem 0 0",
+                    padding: "0.6rem 0.75rem",
+                    fontSize: "0.8rem",
+                    whiteSpace: "pre-wrap",
+                    maxHeight: 160,
+                    overflow: "auto",
+                    background: "var(--surface, #fff)",
+                    borderRadius: 6,
+                  }}
+                >
+                  {runReport.sourceHealth}
+                </pre>
+              )}
+              {runReport.regionCoverage && runReport.regionCoverage.length > 0 && !runReport.sourceHealth && (
+                <pre
+                  style={{
+                    margin: "0.5rem 0 0",
+                    padding: "0.6rem 0.75rem",
+                    fontSize: "0.8rem",
+                    whiteSpace: "pre-wrap",
+                    maxHeight: 140,
+                    overflow: "auto",
+                  }}
+                >
+                  {runReport.regionCoverage.join("\n")}
+                </pre>
+              )}
+              <button
+                type="button"
+                className="btn btn-sm btn-outline"
+                style={{ marginTop: "0.6rem" }}
+                onClick={() => void api.openPath(runReport.path)}
+              >
+                {t("inbox.runHealthOpenReport")}
+              </button>
+            </>
+          ) : (
+            <p className="hint-text">{t("inbox.runHealthNone")}</p>
+          )}
+        </section>
+      )}
 
       {showWrapPanel && (
         <section className="inbox-wrap-panel" style={{ marginBottom: "1.25rem" }}>

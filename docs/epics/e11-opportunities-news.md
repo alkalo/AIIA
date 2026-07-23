@@ -15,18 +15,48 @@ Human review in Inbox (Approve / Reject / Archive). Newsletter wrap remains a se
 - News seeds: `news-sources.ts`; opp lanes: `opportunity-lanes.ts`
 - Filters: `maxAgeDays`, `minDaysRemaining`, `requireVerification`
 - Wrap detection requires explicit wrap/newsletter language (not brand names / opportunity curators)
-- SERP blocked: wait full engine cooldown (~90s) + one retry, then stop empty waves
-- Page fetch appends real `<a href>` markup (`__AIIA_ANCHORS__`) so listing expand works (innerText alone cannot)
-- Listing expand: `listing-expand.ts` harvests `/Go/Show` etc.; deep-links are extracted first
+- SERP blocked: wait full engine cooldown (~75s) + one retry, then stop empty waves
+- Page fetch appends real `<a href>` markup (`__AIIA_ANCHORS__`) so listing expand works (innerText alone cannot); Playwright retries once on thin/challenge pages
+- Listing expand: `listing-expand.ts` harvests `/Go/Show` etc.; deep-links are extracted first (higher cap for exhaustive runs)
+- **Portal parsers:** `portal-parsers.ts` — GrantConnect AU, Grants.gov US, EU F&T, GOV.UK, ADB, IDB, FundsforNGOs/Candid, AfDB, World Bank, UNDP, IsDB. Used before generic href harvest; counted in run health
+- **Portal detail extract:** `portal-detail.ts` fills deadline / organization / program_name / funding from GrantConnect, Grants.gov, EU F&T, GOV.UK/Lottery, ADB, IDB, FundsforNGOs/Candid, AfDB, World Bank, UNDP, IsDB. Fields are **pre-filled into the LLM extract prompt** (`formatPortalDetailHints`) and merged again after extract so empties stay filled
+- **RSS parallel:** up to 28 feeds (opp) / 16 (news) fetched with concurrency 4; items deduped by `canonicalUrl` before seed inject
+- **Host-health re-rank:** `host-health.ts` learns productive hosts across runs (`inbox/{agentId}/host-health.json`) and boosts/demotes relevance before fetch
+- **SERP preference:** `serp-preference.ts` reorders engines from health-history hit counts (Brave API still pinned first when key is set)
 - Score floor re-applied after critic; opportunity extract prompt for all curation subtypes
 - Portal seeds for all opportunity curators (not grants-only)
 - Coverage provenance preserved through extract → validate → curation; post-curation portal rescue if wiped
+- **Global atlas:** `grant-sources.ts` detects regions (AU/NZ/EU/UK/US/CA/ES/LATAM/Asia/Africa/MENA). Unspecified or “global” prompts load multi-region boards + portal seeds (not AU-only). AU/NZ-locked prompts stay scoped. Multilaterals: World Bank + UNDP in global seeds/boards.
+- **RSS/Atom feeds:** `opportunity-feeds.ts` injects official feeds per region (soft-fail per feed); Grants.gov XML parsed in `feed.ts`. Atlas includes CA (IDRC), LATAM (IDB/CEPAL/CAF), Asia (ADB), Africa (AfDB/UNECA), MENA (UNESCWA/EBRD), plus EU CORDIS / UK / ES extras and WB/UNDP news
+- **Listing pagination:** up to 2 extra pages per hub via `discoverListingPageUrls`
+- **Region coverage report:** `coverage-report.ts` logs counts + gaps at end of run
+- **Brave Search API (optional):** key in Settings (`aiia.brave_search`, DPAPI) → agents (`AIIA_BRAVE_SEARCH_API_KEY`) and AIIA Chat `web_search`. Hits tagged `brave-api` vs HTML `brave` in health
 - `tauri:dev` / `predev.ps1` runs `build:packages` so runner always loads fresh `dist/`
+
+## Scraping quality (ongoing)
+- Multi-engine SERP (Mojeek, DDG, Brave, Ecosia, Bing) with health/cooldown and diversity before fill
+- Prefer canonical portal seeds + listing expand + RSS over SERP alone for exhaustiveness
+- Canonical URL dedupe (`canonical-url.ts`) + org/program content key across portals
+- Depth-2 related crawl (bounded) after listing expand
+- Run source-health log: SERP / seeds / RSS / expand / fetch OK-fail
+- Inbox `*-report.json` + inbox JSON include `runMeta` / sourceHealth + regionCoverage
+- Inbox UI: panel “Last run — source health” when an agent is selected (`get_latest_run_report`)
+- Runs UI: latest health for filtered agent + per-run “Health” button (report by runId)
+- Fetch budget: `regionFetchBoost` + `gapFetchBoost` + `sourcesToFetchDiverse`; expand cap via `expandCapForExhaustive`; gap-fill 2ª pasada en runs globales
+- **Feed health:** `feed-health.json` — feeds con 2 fallos consecutivos entran en cooldown 6h; priorización de feeds por huecos históricos (`prioritizeFeedsByRegions`); contadores cooldown/fallos en informe + UI Inbox/Runs
+- Playwright soft-stealth + 3-attempt fetch (domcontentloaded → load → networkidle) + scroll for lazy lists
+- **Gap-fill mid-run:** after listing expand, `uncoveredRegions` + `grantPortalSeedsForRegions` re-inject portals for empty regions (bounded), then one more expand pass
+- **Health history:** `health-history.json` (last 20 runs) under inbox/{agentId}; Inbox/Runs show trend via `get_health_history`
+- SERP engine chips in Inbox/Runs from `serpEngineHits` (Brave API vs Brave HTML, Mojeek, …)
+- **Origin attribution:** `discovery-origin.ts` counts finals by channel (Seeds / RSS / Expand / Depth-2 / Gap-fill / SERP) from provenance tags; shown in source-health text + Inbox/Runs chips (`originCounts`)
+- Regression: `npm run test:scraping` (…, gap/exhaustive budget, feed-health, discovery-origin)
+- Undated concrete opportunities kept as Inbox `pending` rather than dropped
 
 ## UI
 - Inbox review queue filters (pending / approved / rejected / archived)
 - Kind filter (opportunities / news)
 - Approve / Reject / Archive buttons
+- Settings: optional Brave Search API key (save / test / clear)
 
 ## Examples
 - `docs/examples/bfgn-opportunities-prompt.md`

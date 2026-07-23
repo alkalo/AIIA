@@ -14,12 +14,19 @@ export type SearchEngineId =
   | "duckduckgo-lite"
   | "bing"
   | "brave"
+  /** Brave Search API (JSON) — distinct from HTML scrape `brave`. */
+  | "brave-api"
   | "ecosia";
+
+/** Engines that can be invoked by searchWeb (not result-only tags). */
+export type RunnableSearchEngineId = Exclude<SearchEngineId, "brave-api">;
 
 export interface SearchWebOptions {
   engines?: SearchEngineId[];
   debugDir?: string;
   locale?: string;
+  /** Brave Search API subscription token (optional). Prefer API over HTML scrape when set. */
+  braveApiKey?: string;
 }
 
 export interface SearchWebResponse {
@@ -31,9 +38,9 @@ export interface SearchWebResponse {
 }
 
 export const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-const ALL_ENGINES: SearchEngineId[] = [
+const ALL_ENGINES: RunnableSearchEngineId[] = [
   "mojeek",
   "duckduckgo-html",
   "duckduckgo-lite",
@@ -43,8 +50,8 @@ const ALL_ENGINES: SearchEngineId[] = [
 ];
 
 /** Cross-query engine health: skip rate-limited/captcha engines for a cooldown window. */
-const ENGINE_FAIL_THRESHOLD = 2;
-export const ENGINE_COOLDOWN_MS = 90_000;
+const ENGINE_FAIL_THRESHOLD = 3;
+export const ENGINE_COOLDOWN_MS = 75_000;
 type EngineHealth = { fails: number; cooldownUntil: number; successes: number };
 const engineHealth = new Map<SearchEngineId, EngineHealth>();
 
@@ -325,14 +332,20 @@ function parseBing(html: string, max: number): WebSearchResult[] {
 function parseBrave(html: string, max: number): WebSearchResult[] {
   const items: WebSearchResult[] = [];
   const seen = new Set<string>();
-  const re = /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*class="[^"]*(?:h|result-header|svelte)[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null && items.length < max) {
-    const url = normalizeUrl(m[1]);
-    const title = stripHtml(m[2]);
-    if (!title || title.length < 3 || !isValidResultUrl(url) || seen.has(url)) continue;
-    seen.add(url);
-    items.push({ title, url, snippet: "", engine: "brave" });
+  const patterns = [
+    /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*class="[^"]*(?:h|result-header|svelte)[^"]*"[^>]*>([\s\S]*?)<\/a>/g,
+    /<a[^>]*class="[^"]*(?:h|result-header)[^"]*"[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null && items.length < max) {
+      const url = normalizeUrl(m[1]);
+      const title = stripHtml(m[2]);
+      if (!title || title.length < 3 || !isValidResultUrl(url) || seen.has(url)) continue;
+      seen.add(url);
+      items.push({ title, url, snippet: "", engine: "brave" });
+    }
+    if (items.length > 0) break;
   }
   return items;
 }
@@ -340,14 +353,20 @@ function parseBrave(html: string, max: number): WebSearchResult[] {
 function parseEcosia(html: string, max: number): WebSearchResult[] {
   const items: WebSearchResult[] = [];
   const seen = new Set<string>();
-  const re = /<a[^>]*(?:data-test-id="result-link"|class="[^"]*result__link[^"]*")[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null && items.length < max) {
-    const url = normalizeUrl(m[1]);
-    const title = stripHtml(m[2]);
-    if (!title || !isValidResultUrl(url) || seen.has(url)) continue;
-    seen.add(url);
-    items.push({ title, url, snippet: "", engine: "ecosia" });
+  const patterns = [
+    /<a[^>]*(?:data-test-id="result-link"|class="[^"]*result__link[^"]*")[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g,
+    /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*(?:data-test-id="result-link"|class="[^"]*result__link[^"]*")[^>]*>([\s\S]*?)<\/a>/g,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null && items.length < max) {
+      const url = normalizeUrl(m[1]);
+      const title = stripHtml(m[2]);
+      if (!title || !isValidResultUrl(url) || seen.has(url)) continue;
+      seen.add(url);
+      items.push({ title, url, snippet: "", engine: "ecosia" });
+    }
+    if (items.length > 0) break;
   }
   return items;
 }
@@ -436,6 +455,84 @@ function resultsLookRelevant(query: string, results: WebSearchResult[]): boolean
   return matched / results.length >= 0.4 || matched >= 2;
 }
 
+async function searchBraveApi(
+  query: string,
+  max: number,
+  apiKey: string
+): Promise<EngineOutcome> {
+  try {
+    const count = Math.min(20, Math.max(5, max));
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
+    const res = await fetchWithTimeout(url, 15000, {
+      headers: {
+        Accept: "application/json",
+        "X-Subscription-Token": apiKey,
+      },
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { results: [], error: "brave-api: unauthorized (check API key)", retryable: false };
+    }
+    if (res.status === 429) {
+      return { results: [], error: "brave-api rate limit (429)", retryable: true };
+    }
+    if (!res.ok) {
+      return {
+        results: [],
+        error: `brave-api HTTP ${res.status}`,
+        retryable: res.status >= 500,
+      };
+    }
+    const data = (await res.json()) as {
+      web?: { results?: { title?: string; url?: string; description?: string }[] };
+    };
+    const raw = data.web?.results ?? [];
+    const seen = new Set<string>();
+    const results: WebSearchResult[] = [];
+    for (const r of raw) {
+      const href = (r.url ?? "").trim();
+      const title = (r.title ?? "").trim();
+      if (!title || !isValidResultUrl(href) || seen.has(href)) continue;
+      seen.add(href);
+      results.push({
+        title,
+        url: href,
+        snippet: (r.description ?? "").slice(0, 500),
+        engine: "brave-api",
+      });
+      if (results.length >= max) break;
+    }
+    if (results.length === 0) {
+      return { results: [], error: "brave-api: no results", retryable: true };
+    }
+    return { results };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { results: [], error: `brave-api: ${msg}`, retryable: true };
+  }
+}
+
+async function searchBrave(
+  query: string,
+  max: number,
+  locale: string,
+  apiKey?: string
+): Promise<EngineOutcome> {
+  if (apiKey) {
+    const api = await searchBraveApi(query, max, apiKey);
+    if (api.results.length > 0) return api;
+    // Fall back to HTML scrape unless the key is invalid.
+    if (api.error && /unauthorized/i.test(api.error)) return api;
+  }
+  return genericFetchEngine(
+    "brave",
+    `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`,
+    parseBrave,
+    max,
+    undefined,
+    locale
+  );
+}
+
 async function searchBingHttp(query: string, max: number, locale: string): Promise<EngineOutcome> {
   const { setlang, cc } = bingLangParams(locale);
   const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=${setlang}&cc=${cc}&count=${Math.min(30, max + 5)}`;
@@ -467,10 +564,10 @@ async function searchBing(query: string, max: number, locale: string): Promise<E
   };
 }
 
-const ENGINES: Record<SearchEngineId, EngineDef> = {
+const ENGINES: Record<RunnableSearchEngineId, EngineDef> = {
   mojeek: {
     host: "mojeek.com",
-    minIntervalMs: 1200,
+    minIntervalMs: 1400,
     run: (q, max, locale) =>
       genericFetchEngine(
         "mojeek",
@@ -483,7 +580,7 @@ const ENGINES: Record<SearchEngineId, EngineDef> = {
   },
   "duckduckgo-html": {
     host: "duckduckgo.com",
-    minIntervalMs: 900,
+    minIntervalMs: 1100,
     run: (q, max, locale) =>
       genericFetchEngine(
         "duckduckgo-html",
@@ -500,7 +597,7 @@ const ENGINES: Record<SearchEngineId, EngineDef> = {
   },
   "duckduckgo-lite": {
     host: "duckduckgo.com",
-    minIntervalMs: 900,
+    minIntervalMs: 1100,
     run: (q, max, locale) =>
       genericFetchEngine(
         "duckduckgo-lite",
@@ -517,25 +614,17 @@ const ENGINES: Record<SearchEngineId, EngineDef> = {
   },
   bing: {
     host: "bing.com",
-    minIntervalMs: 1500,
+    minIntervalMs: 1800,
     run: (q, max, locale) => searchBing(q, max, locale),
   },
   brave: {
     host: "search.brave.com",
-    minIntervalMs: 1200,
-    run: (q, max, locale) =>
-      genericFetchEngine(
-        "brave",
-        `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`,
-        parseBrave,
-        max,
-        undefined,
-        locale
-      ),
+    minIntervalMs: 1400,
+    run: (q, max, locale) => searchBrave(q, max, locale, activeBraveApiKey),
   },
   ecosia: {
     host: "ecosia.org",
-    minIntervalMs: 1000,
+    minIntervalMs: 1200,
     run: (q, max, locale) =>
       genericFetchEngine(
         "ecosia",
@@ -548,8 +637,11 @@ const ENGINES: Record<SearchEngineId, EngineDef> = {
   },
 };
 
+/** Set for the duration of a searchWeb() call so Brave can use the official API. */
+let activeBraveApiKey: string | undefined;
+
 async function runEngine(
-  engineId: SearchEngineId,
+  engineId: RunnableSearchEngineId,
   query: string,
   max: number,
   locale: string
@@ -558,10 +650,12 @@ async function runEngine(
   if (!def) return { results: [], error: `Unknown engine ${engineId}` };
   return throttleHost(def.host, def.minIntervalMs, async () => {
     let last: EngineOutcome = { results: [], error: `${engineId} not attempted` };
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) await sleep(700 * attempt);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await sleep(800 * attempt);
       last = await def.run(query, max, locale);
       if (last.results.length > 0 || !last.retryable) break;
+      // Hard captcha/403: don't burn retries on the same engine immediately.
+      if (last.error && isHardBlockSearchError(last.error)) break;
     }
     return last;
   });
@@ -661,7 +755,7 @@ function dedupeResults(results: WebSearchResult[]): WebSearchResult[] {
 
 export function enginesForEffort(
   effort: "low" | "medium" | "high" | "super_high" | "ultra_high"
-): SearchEngineId[] {
+): RunnableSearchEngineId[] {
   // Mojeek first: Bing HTTP is often bot-poisoned; keep Bing for Playwright fallback later.
   switch (effort) {
     case "low":
@@ -683,8 +777,25 @@ export async function searchWeb(
   maxResults = 10,
   options: SearchWebOptions = {}
 ): Promise<SearchWebResponse> {
-  const engines = (options.engines ?? ALL_ENGINES).filter((e) => ENGINES[e]);
+  const engines = (options.engines ?? ALL_ENGINES).filter(
+    (e): e is RunnableSearchEngineId => e !== "brave-api" && Boolean(ENGINES[e as RunnableSearchEngineId])
+  );
   const locale = options.locale ?? "en-US";
+  const prevKey = activeBraveApiKey;
+  activeBraveApiKey = options.braveApiKey?.trim() || undefined;
+  try {
+    return await searchWebInner(query, maxResults, engines, locale);
+  } finally {
+    activeBraveApiKey = prevKey;
+  }
+}
+
+async function searchWebInner(
+  query: string,
+  maxResults: number,
+  engines: RunnableSearchEngineId[],
+  locale: string
+): Promise<SearchWebResponse> {
   const errors: SearchWebResponse["errors"] = [];
   const counts: Partial<Record<SearchEngineId, number>> = {};
   let merged: WebSearchResult[] = [];
@@ -693,7 +804,12 @@ export async function searchWeb(
   const allCooling = engines.length > 0 && live.length === 0;
 
   // Prefer recently successful engines; skip those in cooldown.
+  // When Brave API key is active, prefer Brave first for reliable hits.
   const ordered = [...engines].sort((a, b) => {
+    if (activeBraveApiKey) {
+      if (a === "brave" && b !== "brave") return -1;
+      if (b === "brave" && a !== "brave") return 1;
+    }
     const coolA = isEngineCooling(a) ? 1 : 0;
     const coolB = isEngineCooling(b) ? 1 : 0;
     if (coolA !== coolB) return coolA - coolB;
@@ -703,9 +819,9 @@ export async function searchWeb(
   let attempted = 0;
   let hardBlockFails = 0;
 
-  // Secuencial: en high+ no cortar al primer motor que llena el cupo — diversificar.
+  // Secuencial: no cortar al primer motor que llena el cupo — diversificar fuentes.
   const minEnginesBeforeFill =
-    engines.length >= 5 ? 3 : engines.length >= 4 ? 2 : 1;
+    engines.length >= 5 ? 4 : engines.length >= 3 ? 3 : engines.length >= 2 ? 2 : 1;
   for (const engineId of ordered) {
     if (merged.length >= maxResults && attempted >= minEnginesBeforeFill) break;
     if (isEngineCooling(engineId)) {
@@ -718,8 +834,11 @@ export async function searchWeb(
     attempted += 1;
     const need = Math.max(3, maxResults - merged.length);
     const outcome = await runEngine(engineId, query, need, locale);
-    counts[engineId] = (counts[engineId] ?? 0) + outcome.results.length;
+    // Count by result tag so Brave API (`brave-api`) is distinct from HTML (`brave`).
     if (outcome.results.length > 0) {
+      for (const r of outcome.results) {
+        counts[r.engine] = (counts[r.engine] ?? 0) + 1;
+      }
       noteEngineSuccess(engineId);
     } else if (outcome.error) {
       errors.push({ engine: engineId, message: outcome.error });

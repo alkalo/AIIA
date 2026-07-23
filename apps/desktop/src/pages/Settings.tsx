@@ -120,6 +120,7 @@ export function Settings() {
   const {
     provider: aiProvider,
     hasGeminiKey,
+    hasBraveSearchKey,
     setProvider,
     refresh: refreshProvider,
   } = useAiProvider();
@@ -127,6 +128,10 @@ export function Settings() {
   const [geminiBusy, setGeminiBusy] = useState(false);
   const [geminiMsg, setGeminiMsg] = useState("");
   const [geminiErr, setGeminiErr] = useState("");
+  const [braveKeyInput, setBraveKeyInput] = useState("");
+  const [braveBusy, setBraveBusy] = useState(false);
+  const [braveMsg, setBraveMsg] = useState("");
+  const [braveErr, setBraveErr] = useState("");
 
   const [siteName, setSiteName] = useState("");
   const [wizardStep, setWizardStep] = useState<WizardStep>("idle");
@@ -297,6 +302,52 @@ export function Settings() {
     }
   };
 
+  const handleSaveBraveKey = async () => {
+    if (!braveKeyInput.trim()) return;
+    setBraveBusy(true);
+    setBraveErr("");
+    setBraveMsg("");
+    try {
+      await api.setBraveSearchApiKey(braveKeyInput.trim());
+      await refreshProvider();
+      setBraveKeyInput("");
+      setBraveMsg(t("settings.braveKeySaved"));
+    } catch (e) {
+      setBraveErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBraveBusy(false);
+    }
+  };
+
+  const handleClearBraveKey = async () => {
+    setBraveBusy(true);
+    setBraveErr("");
+    setBraveMsg("");
+    try {
+      await api.clearBraveSearchApiKey();
+      await refreshProvider();
+      setBraveMsg("");
+    } catch (e) {
+      setBraveErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBraveBusy(false);
+    }
+  };
+
+  const handleTestBraveKey = async () => {
+    setBraveBusy(true);
+    setBraveErr("");
+    setBraveMsg("");
+    try {
+      await api.testBraveSearchApiKey(braveKeyInput.trim() || undefined);
+      setBraveMsg(t("settings.braveTestOk"));
+    } catch (e) {
+      setBraveErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBraveBusy(false);
+    }
+  };
+
   const updateProgress =
     updateStatus?.phase === "downloading" && updateStatus.percent != null
       ? updateStatus.percent
@@ -434,6 +485,58 @@ export function Settings() {
         </div>
         {geminiMsg && <p className="status-ok" style={{ marginTop: "0.5rem" }}>{geminiMsg}</p>}
         {geminiErr && <p className="error-text" style={{ marginTop: "0.5rem" }}>{geminiErr}</p>}
+
+        <label style={{ marginTop: "1.25rem", display: "block" }}>{t("settings.braveSearchApiKey")}</label>
+        <p className="hint-text">{t("settings.braveSearchHint")}</p>
+        <p className="hint-text">
+          {hasBraveSearchKey ? t("settings.braveKeySaved") : t("settings.braveKeyMissing")}
+        </p>
+        <input
+          type="password"
+          className="input"
+          autoComplete="off"
+          placeholder={t("settings.braveApiKeyPlaceholder")}
+          value={braveKeyInput}
+          onChange={(e) => setBraveKeyInput(e.target.value)}
+          style={{ maxWidth: 420 }}
+        />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={braveBusy || !braveKeyInput.trim()}
+            onClick={() => void handleSaveBraveKey()}
+          >
+            {t("settings.braveSaveKey")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={braveBusy || (!braveKeyInput.trim() && !hasBraveSearchKey)}
+            onClick={() => void handleTestBraveKey()}
+          >
+            {braveBusy ? t("settings.braveTesting") : t("settings.braveTestKey")}
+          </button>
+          {hasBraveSearchKey && (
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              disabled={braveBusy}
+              onClick={() => void handleClearBraveKey()}
+            >
+              {t("settings.braveClearKey")}
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-outline btn-sm"
+            onClick={() => void api.openUrl("https://brave.com/search/api/")}
+          >
+            {t("settings.braveGetKey")}
+          </button>
+        </div>
+        {braveMsg && <p className="status-ok" style={{ marginTop: "0.5rem" }}>{braveMsg}</p>}
+        {braveErr && <p className="error-text" style={{ marginTop: "0.5rem" }}>{braveErr}</p>}
       </div>
 
       <div className="card" style={{ marginBottom: "1rem" }}>

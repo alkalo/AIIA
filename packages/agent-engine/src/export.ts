@@ -22,11 +22,33 @@ export interface ExportPaths {
   emailPath?: string;
 }
 
+/** Optional run meta persisted into inbox + report JSON for Inbox / debugging. */
+export interface ExportRunMeta {
+  sourceHealth?: string;
+  regionCoverage?: string[];
+  regionGaps?: string[];
+  serpExhausted?: boolean;
+  listingExpandCount?: number;
+  depth2Count?: number;
+  feedItemCount?: number;
+  seedCount?: number;
+  gapFillCount?: number;
+  /** Per-engine SERP hit counts (brave-api vs brave HTML, etc.). */
+  serpEngineHits?: Record<string, number>;
+  portalParserCount?: number;
+  portalDetailCount?: number;
+  feedSkippedCount?: number;
+  feedFailCount?: number;
+  /** Finals by discovery channel (rss / portal-seed / serp / …). */
+  originCounts?: Record<string, number>;
+}
+
 export async function exportResults(
   items: ExtractedItem[],
   spec: AgentSpec,
   dataDir: string,
-  runId?: string
+  runId?: string,
+  meta?: ExportRunMeta
 ): Promise<ExportPaths> {
   const destinations = spec.output.destinations;
   const paths: ExportPaths = {};
@@ -64,6 +86,7 @@ export async function exportResults(
           results: items,
           newsletterPath: paths.newsletterPath,
           copyPasteOnly: true,
+          runMeta: meta ?? undefined,
         },
         null,
         2
@@ -85,6 +108,21 @@ export async function exportResults(
           })),
           newsletterPath: paths.newsletterPath,
           copyPasteOnly: true,
+          sourceHealth: meta?.sourceHealth,
+          regionCoverage: meta?.regionCoverage,
+          regionGaps: meta?.regionGaps,
+          serpExhausted: meta?.serpExhausted,
+          listingExpandCount: meta?.listingExpandCount,
+          depth2Count: meta?.depth2Count,
+          feedItemCount: meta?.feedItemCount,
+          seedCount: meta?.seedCount,
+          gapFillCount: meta?.gapFillCount,
+          serpEngineHits: meta?.serpEngineHits,
+          portalParserCount: meta?.portalParserCount,
+          portalDetailCount: meta?.portalDetailCount,
+          feedSkippedCount: meta?.feedSkippedCount,
+          feedFailCount: meta?.feedFailCount,
+          originCounts: meta?.originCounts,
         },
         null,
         2

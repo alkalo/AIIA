@@ -18,6 +18,7 @@
     "smoke:chat": "node scripts/smoke-chat.mjs",
     "smoke:gemini-client": "node scripts/smoke-gemini-client.mjs",
     "lint": "npm run build:packages",
+    "test:scraping": "npm run build -w @aiia/agent-engine && npm run test -w @aiia/agent-engine",
     "playwright:install": "npm exec playwright install chromium --prefix packages/scraper",
     "cloud:build": "node scripts/render-cloud-build.mjs",
     "cloud:start": "node services/cloud-scheduler/src/index.js"

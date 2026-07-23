@@ -13,6 +13,7 @@ import {
   stripLinkMarkup,
   type ScraperOptions,
   type SearchEngineId,
+  type RunnableSearchEngineId,
 } from "@aiia/scraper";
 import {
   OllamaClient,
@@ -30,6 +31,7 @@ import {
   type EffortLevel,
   type ResearchProfile,
   type LlmClient,
+  type BudgetPhase,
 } from "@aiia/ollama-client";
 import type { AgentSpec, ExtractedItem, ProgressEvent, SearchResult, LoginRequirement } from "./types.js";
 import { resolveSearchLimits, perQueryLimit, type SearchLimits } from "./search-limits.js";
@@ -42,8 +44,8 @@ import {
 } from "./search-quality.js";
 import { serpToExtractedItems } from "./query-replan.js";
 import { buildSearchPlan, analyzeCoverage, queriesFromPlan, type SearchPlan } from "./search-plan.js";
-import { rankSources, sourcesToFetch, type RankedSource } from "./source-ranker.js";
-import { fetchLimitForBudget, extractLimitForBudget } from "./budget.js";
+import { rankSources, sourcesToFetchDiverse, type RankedSource } from "./source-ranker.js";
+import { fetchLimitForBudget, extractLimitForBudget, regionFetchBoost, gapFetchBoost, expandCapForExhaustive } from "./budget.js";
 import { mapPool } from "./parallel.js";
 import {
   LogAction,
@@ -82,7 +84,19 @@ import {
   resolveOpportunityUrl,
 } from "./result-quality.js";
 import { sectorExpansionQueries, jobPortalDeepLinkSeeds } from "./sector-sources.js";
-import { grantExpansionQueries, grantSeedQueries, grantPortalDeepLinkSeeds } from "./grant-sources.js";
+import {
+  grantExpansionQueries,
+  grantSeedQueries,
+  grantPortalDeepLinkSeeds,
+  grantPortalSeedsForRegions,
+} from "./grant-sources.js";
+import { opportunityFeedsForSpec, prioritizeFeedsByRegions } from "./opportunity-feeds.js";
+import {
+  buildRegionCoverage,
+  requestedRegionsForSpec,
+  uncoveredRegions,
+  inferItemRegion,
+} from "./coverage-report.js";
 import { isNewsletterWrapTarget } from "./newsletter.js";
 import { flattenWrapLaneQueries } from "./wrap-lanes.js";
 import { sectorNewsQueryPack, sectorNewsPortalSeeds } from "./news-sources.js";
@@ -91,8 +105,39 @@ import { applyCurationPipeline, collectKnownFingerprints } from "./curation.js";
 import {
   extractOpportunityDeepLinks,
   isExpandableListingPage,
+  discoverListingPageUrls,
 } from "./listing-expand.js";
 import { hasCoverageProvenance } from "./coverage-markers.js";
+import { canonicalUrl, opportunityContentKey } from "./canonical-url.js";
+import {
+  appendHealthHistory,
+  formatHealthHistoryTrend,
+  formatSourceHealthReport,
+  readHealthHistory,
+} from "./source-health.js";
+import { countDiscoveryOrigins } from "./discovery-origin.js";
+import {
+  extractPortalDetails,
+  formatPortalDetailHints,
+  mergePortalDetails,
+  portalDetailHasSignal,
+} from "./portal-detail.js";
+import { resolveEngineOrder } from "./serp-preference.js";
+import {
+  filterHealthyFeeds,
+  formatFeedHealthSummary,
+  noteFeedFailure,
+  noteFeedSuccess,
+  readFeedHealth,
+} from "./feed-health.js";
+import {
+  applyHostHealthBoost,
+  formatHostHealthBoostSummary,
+  hostBoostMapFromHealth,
+  normalizeHost,
+  readHostHealth,
+  updateHostHealth,
+} from "./host-health.js";
 import { readdir } from "node:fs/promises";
 import {
   realEstateExpansionQueries,
@@ -284,6 +329,21 @@ export class Executor {
   private criticModel?: string;
   private runLog?: ActionLogger;
   private searchLocale = "en-US";
+  /** Optional Brave Search API key (from AIIA_BRAVE_SEARCH_API_KEY). */
+  private braveApiKey = process.env.AIIA_BRAVE_SEARCH_API_KEY?.trim() || undefined;
+  private runHealth = {
+    seedCount: 0,
+    feedItemCount: 0,
+    listingExpandCount: 0,
+    depth2Count: 0,
+    pageFetchOk: 0,
+    pageFetchFail: 0,
+    gapFillCount: 0,
+    portalParserCount: 0,
+    portalDetailCount: 0,
+    feedSkippedCount: 0,
+    feedFailCount: 0,
+  };
 
   constructor(ollama?: LlmClient) {
     this.ollama = ollama ?? new OllamaClient();
@@ -398,7 +458,41 @@ export class Executor {
     const dataDir = process.env.AIIA_DATA_DIR ?? `${process.env.USERPROFILE ?? process.env.HOME}/AIIA`;
     const debugDir = join(dataDir, "logs", "search-debug");
     const sessions = await loadCredentialSessions(dataDir);
-    const webEngines = enginesForEffort(effort);
+    this.runHealth = {
+      seedCount: 0,
+      feedItemCount: 0,
+      listingExpandCount: 0,
+      depth2Count: 0,
+      pageFetchOk: 0,
+      pageFetchFail: 0,
+      gapFillCount: 0,
+      portalParserCount: 0,
+      portalDetailCount: 0,
+      feedSkippedCount: 0,
+      feedFailCount: 0,
+    };
+    let webEngines: RunnableSearchEngineId[] = enginesForEffort(effort);
+    try {
+      const hist = await readHealthHistory(dataDir, spec.id, 12);
+      webEngines = resolveEngineOrder(webEngines, hist, {
+        braveApiKey: this.braveApiKey,
+      });
+      if (hist.length > 0) {
+        log(
+          LogAction.INFO,
+          "SERP: orden por historial del agente",
+          webEngines.join(" → "),
+          "planning"
+        );
+      }
+    } catch {
+      if (this.braveApiKey) {
+        webEngines = ["brave", ...webEngines.filter((e) => e !== "brave")];
+      }
+    }
+    if (this.braveApiKey && webEngines[0] !== "brave") {
+      webEngines = ["brave", ...webEngines.filter((e) => e !== "brave")];
+    }
     const engineTotals: Partial<Record<SearchEngineId, number>> = {};
 
     log(
@@ -410,7 +504,7 @@ export class Executor {
         `Modelos: plan=${this.plannerModel}, extract=${this.extractorModel}${this.criticModel ? `, critic=${this.criticModel}` : ""}`,
         `Estrategia: olas=${profile.searchWaves}, rank IA=${profile.llmRank ? "sí" : "no"}, fetch=${profile.fetchPolicy}, extract=${profile.extractPolicy}`,
         `Límite de enlaces: ${maxSources}${searchLimits.fromAgentConfig ? " (configurado en agente)" : ` (modo ${effort})`}`,
-        `Motores web: ${webEngines.join(", ")}`,
+        `Motores web: ${webEngines.join(", ")}${this.braveApiKey ? " · Brave Search API activa" : ""}`,
         `Locale búsqueda: ${resolveSearchLocale(spec)}`,
         `Objetivo: ${truncate(spec.prompt, 200)}`,
       ].join("\n"),
@@ -508,6 +602,7 @@ export class Executor {
       for (const s of portals) {
         seedSources.push({ title: s.title, url: s.url, snippet: s.snippet });
       }
+      this.runHealth.seedCount += portals.length;
       if (portals.length > 0) {
         log(
           LogAction.WEB_SEARCH,
@@ -518,7 +613,7 @@ export class Executor {
       }
     }
     if (isSectorNewsTarget(spec)) {
-      const portals = sectorNewsPortalSeeds();
+      const portals = sectorNewsPortalSeeds(spec.prompt || "");
       for (const s of portals) {
         seedSources.push({ title: s.title, url: s.url, snippet: s.snippet });
       }
@@ -543,6 +638,105 @@ export class Executor {
         );
       }
     }
+
+    // Official RSS/Atom feeds (soft-fail per feed) for grants / opportunities / news.
+    if (
+      isGrantTarget(spec) ||
+      isCurationOpportunityTarget(spec) ||
+      isSectorNewsTarget(spec)
+    ) {
+      let allFeeds = opportunityFeedsForSpec(spec);
+      // Prefer feeds for regions that were gaps in recent runs.
+      try {
+        const hist = await readHealthHistory(dataDir, spec.id, 5);
+        const preferGaps = new Set<string>();
+        for (const e of hist) {
+          for (const g of e.regionGaps ?? []) preferGaps.add(g);
+        }
+        if (preferGaps.size > 0) {
+          allFeeds = prioritizeFeedsByRegions(allFeeds, preferGaps);
+          log(
+            LogAction.INFO,
+            `Feeds priorizados por huecos históricos: ${[...preferGaps].slice(0, 6).join(", ")}`,
+            undefined,
+            "searching"
+          );
+        }
+      } catch {
+        /* soft-fail */
+      }
+
+      const feedHealth = await readFeedHealth(dataDir, spec.id).catch(() => null);
+      const { active: feeds, skipped: skippedFeeds } = feedHealth
+        ? filterHealthyFeeds(allFeeds, feedHealth)
+        : { active: allFeeds, skipped: [] as typeof allFeeds };
+      this.runHealth.feedSkippedCount = skippedFeeds.length;
+      if (skippedFeeds.length > 0) {
+        log(
+          LogAction.INFO,
+          `Feeds en cooldown: ${skippedFeeds.length} omitidos`,
+          skippedFeeds.map((f) => `  → ${f.title}`).join("\n"),
+          "searching"
+        );
+      }
+
+      // Cap feeds per run; parallel fetch so more regions complete within wall-clock.
+      const feedCap = Math.min(
+        feeds.length,
+        isGrantTarget(spec) || isCurationOpportunityTarget(spec) ? 28 : 16
+      );
+      const feedsToFetch = feeds.slice(0, feedCap);
+      let feedHits = 0;
+      const seenFeedUrls = new Set<string>();
+      const feedResults = await mapPool(feedsToFetch, 4, async (feed) => {
+        try {
+          const items = await fetchFeed(feed.url, 25);
+          await noteFeedSuccess(dataDir, spec.id, feed.url).catch(() => undefined);
+          return { feed, items, error: null as string | null };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await noteFeedFailure(dataDir, spec.id, feed.url, msg).catch(() => undefined);
+          return { feed, items: [] as Awaited<ReturnType<typeof fetchFeed>>, error: msg };
+        }
+      });
+
+      for (const { feed, items, error } of feedResults) {
+        if (error) {
+          this.runHealth.feedFailCount += 1;
+          log(
+            LogAction.INFO,
+            `Feed omitido: ${feed.title}`,
+            truncate(error, 160),
+            "searching"
+          );
+          continue;
+        }
+        for (const it of items) {
+          if (!it.url || !/^https?:\/\//i.test(it.url)) continue;
+          const key = canonicalUrl(it.url) || it.url.split("#")[0].toLowerCase();
+          if (seenFeedUrls.has(key)) continue;
+          seenFeedUrls.add(key);
+          seedSources.push({
+            title: it.title || feed.title,
+            url: it.url,
+            snippet: `RSS feed (${feed.region}): ${it.snippet || feed.title}`,
+          });
+          feedHits += 1;
+        }
+      }
+      this.runHealth.feedItemCount += feedHits;
+      if (feedHits > 0) {
+        log(
+          LogAction.WEB_SEARCH,
+          `Feeds RSS/Atom: ${feedHits} items de ${feedsToFetch.length}/${feeds.length} feeds (paralelo×4)`,
+          feedsToFetch
+            .slice(0, 12)
+            .map((f) => `  → [${f.region}] ${f.title}`)
+            .join("\n"),
+          "searching"
+        );
+      }
+    }
     let rankedSources: RankedSource[] = seedSources.length
       ? await rankSources(
           dedupeHits(seedSources),
@@ -554,6 +748,23 @@ export class Executor {
           cfg.numCtx
         )
       : [];
+
+    // Historical host productivity: boost portals that produced finals in prior runs.
+    try {
+      const hostFile = await readHostHealth(dataDir, spec.id);
+      const hostBoosts = hostBoostMapFromHealth(hostFile);
+      if (hostBoosts.size > 0 && rankedSources.length > 0) {
+        rankedSources = applyHostHealthBoost(rankedSources, hostBoosts);
+        log(
+          LogAction.INFO,
+          `Host-health: boost histórico (${hostBoosts.size} hosts)`,
+          formatHostHealthBoostSummary(hostBoosts),
+          "planning"
+        );
+      }
+    } catch {
+      /* soft-fail */
+    }
 
     log(
       LogAction.LLM_PLAN,
@@ -933,14 +1144,51 @@ export class Executor {
     }
 
     const bPhase = budgetPhase(startTime, profile);
+    // Re-apply host-health after SERP waves (rank may have overwritten boosts).
+    try {
+      const hostFile = await readHostHealth(dataDir, spec.id);
+      const hostBoosts = hostBoostMapFromHealth(hostFile);
+      if (hostBoosts.size > 0) {
+        rankedSources = applyHostHealthBoost(rankedSources, hostBoosts);
+      }
+    } catch {
+      /* soft-fail */
+    }
     const pinnedHigh = rankedSources.filter((r) => r.fetchPriority === "high").length;
-    const fetchLimit = fetchLimitForBudget(rankedSources.length, profile, bPhase, pinnedHigh);
-    const toFetch = sourcesToFetch(rankedSources, fetchLimit);
+    const requestedRegions = requestedRegionsForSpec(spec.prompt || "", spec.filters.criteria || "");
+    const exhaustiveGlobal =
+      requestedRegions.has("global") &&
+      (isGrantTarget(spec) || isCurationOpportunityTarget(spec));
+    const earlyGaps =
+      isGrantTarget(spec) || isCurationOpportunityTarget(spec)
+        ? uncoveredRegions(
+            rankedSources.map((r) => r.url),
+            requestedRegions
+          )
+        : [];
+    const regionBoostBase =
+      isGrantTarget(spec) || isCurationOpportunityTarget(spec) || isSectorNewsTarget(spec)
+        ? regionFetchBoost(requestedRegions.size, exhaustiveGlobal)
+        : 0;
+    const regionBoost =
+      regionBoostBase + gapFetchBoost(earlyGaps.length, bPhase);
+    const fetchLimit = fetchLimitForBudget(
+      rankedSources.length,
+      profile,
+      bPhase,
+      pinnedHigh,
+      regionBoost
+    );
+    const toFetch = sourcesToFetchDiverse(rankedSources, fetchLimit, (url) =>
+      inferItemRegion({ url })
+    );
 
     if (profile.fetchPolicy !== "none" && toFetch.length > 0) {
       log(
         LogAction.PAGE_FETCH,
-        `${toFetch.length} páginas a leer (prioridad alta/media)`,
+        `${toFetch.length} páginas a leer (prioridad alta/media)${
+          regionBoost ? ` · boost regional +${regionBoost}` : ""
+        }${earlyGaps.length ? ` · huecos prev: ${earlyGaps.slice(0, 4).join(",")}` : ""}`,
         toFetch
           .slice(0, 8)
           .map((r, i) => `  ${i + 1}. [${r.fetchPriority}] ${truncateUrl(r.url)}`)
@@ -973,7 +1221,27 @@ export class Executor {
           sessions,
           scraperOptions,
           progress,
+          log,
+          { exhaustive: exhaustiveGlobal, gapCount: earlyGaps.length }
+        );
+        rankedSources = await this.expandDepth2Related(
+          rankedSources,
+          maxSources,
+          spec,
+          sessions,
+          scraperOptions,
+          progress,
           log
+        );
+        rankedSources = await this.gapFillUncoveredRegions(
+          rankedSources,
+          maxSources,
+          spec,
+          sessions,
+          scraperOptions,
+          progress,
+          log,
+          { exhaustive: exhaustiveGlobal, phase: bPhase }
         );
       }
     }
@@ -1298,6 +1566,57 @@ export class Executor {
       finalItems = sortByDeadlineAsc(finalItems);
     }
 
+    let lastCoverage: ReturnType<typeof buildRegionCoverage> | undefined;
+    if (
+      isGrantTarget(spec) ||
+      isCurationOpportunityTarget(spec) ||
+      isSectorNewsTarget(spec)
+    ) {
+      const requested = requestedRegionsForSpec(spec.prompt || "", spec.filters.criteria || "");
+      lastCoverage = buildRegionCoverage(finalItems, requested);
+      log(
+        LogAction.LLM_COVERAGE,
+        `Coverage regional: ${finalItems.length} items · ${lastCoverage.rows.length} regiones · huecos ${lastCoverage.gaps.length}`,
+        lastCoverage.summaryLines.join("\n"),
+        "filtering"
+      );
+      if (lastCoverage.gaps.length > 0) {
+        progress(
+          "filtering",
+          88,
+          `Coverage: huecos en ${lastCoverage.gaps.slice(0, 4).join(", ")}`,
+          { action: LogAction.LLM_COVERAGE }
+        );
+      }
+    }
+
+    const originCounts = countDiscoveryOrigins(finalItems);
+
+    const healthText = formatSourceHealthReport({
+      serpEngineHits: Object.fromEntries(
+        Object.entries(engineTotals).map(([k, v]) => [k, v ?? 0])
+      ),
+      seedCount: this.runHealth.seedCount,
+      feedItemCount: this.runHealth.feedItemCount,
+      listingExpandCount: this.runHealth.listingExpandCount,
+      depth2Count: this.runHealth.depth2Count,
+      pageFetchOk: this.runHealth.pageFetchOk,
+      pageFetchFail: this.runHealth.pageFetchFail,
+      finalCount: finalItems.length,
+      serpExhausted: runSerpExhausted,
+      gapFillCount: this.runHealth.gapFillCount,
+      portalParserCount: this.runHealth.portalParserCount,
+      portalDetailCount: this.runHealth.portalDetailCount,
+      feedSkippedCount: this.runHealth.feedSkippedCount,
+      feedFailCount: this.runHealth.feedFailCount,
+      feedCooldownLines: await readFeedHealth(dataDir, spec.id)
+        .then((fh) => formatFeedHealthSummary(fh).lines)
+        .catch(() => [] as string[]),
+      originCounts,
+    });
+
+    log(LogAction.INFO, "Salud de fuentes del run", healthText, "filtering");
+
     log(
       LogAction.FILTER,
       `${finalItems.length} resultados finales (umbral ≥ ${minScore})`,
@@ -1316,7 +1635,70 @@ export class Executor {
 
     progress("exporting", 90, "Exportando resultados…", { action: LogAction.EXPORT });
     const runId = process.env.AIIA_RUN_ID;
-    const exportPaths = await exportResults(finalItems, spec, dataDir, runId);
+    const exportPaths = await exportResults(finalItems, spec, dataDir, runId, {
+      sourceHealth: healthText,
+      regionCoverage: lastCoverage?.summaryLines,
+      regionGaps: lastCoverage?.gaps,
+      serpExhausted: runSerpExhausted,
+      listingExpandCount: this.runHealth.listingExpandCount,
+      depth2Count: this.runHealth.depth2Count,
+      feedItemCount: this.runHealth.feedItemCount,
+      seedCount: this.runHealth.seedCount,
+      gapFillCount: this.runHealth.gapFillCount,
+      portalParserCount: this.runHealth.portalParserCount,
+      portalDetailCount: this.runHealth.portalDetailCount,
+      feedSkippedCount: this.runHealth.feedSkippedCount,
+      feedFailCount: this.runHealth.feedFailCount,
+      serpEngineHits: Object.fromEntries(
+        Object.entries(engineTotals).map(([k, v]) => [k, v ?? 0])
+      ),
+      originCounts,
+    });
+
+    try {
+      await appendHealthHistory(dataDir, spec.id, {
+        at: new Date().toISOString(),
+        runId: runId || undefined,
+        finalCount: finalItems.length,
+        serpExhausted: runSerpExhausted,
+        seedCount: this.runHealth.seedCount,
+        feedItemCount: this.runHealth.feedItemCount,
+        listingExpandCount: this.runHealth.listingExpandCount,
+        depth2Count: this.runHealth.depth2Count,
+        pageFetchOk: this.runHealth.pageFetchOk,
+        pageFetchFail: this.runHealth.pageFetchFail,
+        regionGaps: lastCoverage?.gaps,
+        gapFillCount: this.runHealth.gapFillCount,
+        topSerp: Object.entries(engineTotals)
+          .filter(([, n]) => (n ?? 0) > 0)
+          .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+          .slice(0, 3)
+          .map(([e, n]) => `${engineLabel(e as SearchEngineId)}:${n}`)
+          .join(", "),
+        serpEngineHits: Object.fromEntries(
+          Object.entries(engineTotals).map(([k, v]) => [k, v ?? 0])
+        ),
+        originCounts,
+      });
+      const candidateHosts = rankedSources
+        .slice(0, 40)
+        .map((r) => normalizeHost(r.url))
+        .filter(Boolean);
+      await updateHostHealth(
+        dataDir,
+        spec.id,
+        finalItems.map((i) => String(i.url ?? "")).filter(Boolean),
+        candidateHosts
+      );
+      const hist = await readHealthHistory(dataDir, spec.id, 8);
+      const trend = formatHealthHistoryTrend(hist);
+      if (trend) {
+        log(LogAction.INFO, "Tendencia health (últimos runs)", trend, "exporting");
+      }
+    } catch {
+      /* soft-fail history */
+    }
+
     log(
       LogAction.EXPORT,
       "Resultados exportados",
@@ -1399,6 +1781,7 @@ export class Executor {
           engines: webEngines,
           debugDir: collected.length === 0 && existing.length === 0 ? debugDir : undefined,
           locale: this.searchLocale,
+          braveApiKey: this.braveApiKey,
         });
         for (const [eng, n] of Object.entries(counts)) {
           engineTotals[eng as SearchEngineId] = (engineTotals[eng as SearchEngineId] ?? 0) + (n ?? 0);
@@ -1499,6 +1882,7 @@ export class Executor {
         const content = await fetchPageContent(result.url, urlOptions);
         if (content.length > 200) {
           enriched[idx] = { ...enriched[idx], rawHtml: content };
+          this.runHealth.pageFetchOk += 1;
           log(
             LogAction.PAGE_FETCH,
             `Página ${i + 1}/${toFetch.length} leída (${content.length} caracteres)`,
@@ -1506,6 +1890,7 @@ export class Executor {
             "searching"
           );
         } else {
+          this.runHealth.pageFetchFail += 1;
           log(
             LogAction.PAGE_FETCH,
             `Página ${i + 1}/${toFetch.length} — contenido insuficiente, se usa snippet`,
@@ -1516,6 +1901,7 @@ export class Executor {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const blocked = /challenge|captcha|blocked \(HTTP/i.test(msg);
+        this.runHealth.pageFetchFail += 1;
         log(
           LogAction.PAGE_FETCH,
           blocked
@@ -1533,6 +1919,7 @@ export class Executor {
 
   /**
    * From fetched listing/portal HTML, harvest concrete opportunity URLs and fetch them.
+   * Also follows up to 2 pagination pages per expandable listing (bounded).
    */
   private async expandListingPages(
     ranked: RankedSource[],
@@ -1541,26 +1928,81 @@ export class Executor {
     sessions: CredentialIndex,
     scraperOptions: ScraperOptions | undefined,
     progress: (phase: ProgressEvent["phase"], percent: number, message: string) => void,
-    log: ActionLogger
+    log: ActionLogger,
+    opts?: { exhaustive?: boolean; gapCount?: number }
   ): Promise<RankedSource[]> {
     const seen = new Set(ranked.map((r) => normalizeUrl(r.url)));
     const candidates: RankedSource[] = [];
-    const expandCap = Math.min(48, Math.max(12, Math.floor(maxSources / 4)));
+    const expandCap = expandCapForExhaustive(maxSources, {
+      exhaustive: opts?.exhaustive,
+      gapCount: opts?.gapCount,
+    });
+    const listingPages: { url: string; html: string }[] = [];
 
     for (const src of ranked) {
       if (!src.rawHtml || !isExpandableListingPage(src.url, src.rawHtml)) continue;
-      const links = extractOpportunityDeepLinks(src.rawHtml, src.url, expandCap);
+      listingPages.push({ url: src.url, html: src.rawHtml });
+    }
+
+    // Bounded pagination: fetch up to 2 extra pages per listing hub (max 4 hubs).
+    const extraListingUrls: string[] = [];
+    for (const hub of listingPages.slice(0, 4)) {
+      for (const next of discoverListingPageUrls(hub.html, hub.url, 2)) {
+        const key = normalizeUrl(next);
+        if (seen.has(key)) continue;
+        if (extraListingUrls.includes(next)) continue;
+        extraListingUrls.push(next);
+      }
+    }
+
+    if (extraListingUrls.length > 0) {
+      log(
+        LogAction.WEB_SEARCH,
+        `Paginación de listados: ${extraListingUrls.length} páginas extra`,
+        extraListingUrls.map((u) => `  → ${truncateUrl(u)}`).join("\n"),
+        "searching"
+      );
+      progress("searching", 25, `Leyendo ${extraListingUrls.length} páginas de listado…`);
+      const pageSources: RankedSource[] = extraListingUrls.map((url) => ({
+        title: `Listing page — ${url}`,
+        url,
+        snippet: "Listing pagination expand",
+        relevance: 70,
+        fetchPriority: "high" as const,
+        rankReason: "Listing pagination",
+      }));
+      const fetchedPages = await this.enrichRanked(
+        pageSources,
+        pageSources,
+        spec,
+        sessions,
+        scraperOptions,
+        progress,
+        log
+      );
+      for (const p of fetchedPages) {
+        if (p.rawHtml && isExpandableListingPage(p.url, p.rawHtml)) {
+          listingPages.push({ url: p.url, html: p.rawHtml });
+        }
+      }
+    }
+
+    for (const src of listingPages) {
+      const links = extractOpportunityDeepLinks(src.html, src.url, expandCap);
       for (const link of links) {
         const key = normalizeUrl(link.url);
         if (seen.has(key)) continue;
         seen.add(key);
+        if (link.parser) this.runHealth.portalParserCount += 1;
         candidates.push({
           title: link.title,
           url: link.url,
           snippet: link.snippet,
-          relevance: 78,
+          relevance: link.parser ? 86 : 78,
           fetchPriority: "high",
-          rankReason: "Listing deep-link expand",
+          rankReason: link.parser
+            ? `Portal parser (${link.parser})`
+            : "Listing deep-link expand",
         });
         if (candidates.length >= expandCap) break;
       }
@@ -1569,9 +2011,13 @@ export class Executor {
 
     if (candidates.length === 0) return ranked;
 
+    this.runHealth.listingExpandCount += candidates.length;
+    const portalHits = this.runHealth.portalParserCount;
     log(
       LogAction.WEB_SEARCH,
-      `Crawl profundo: ${candidates.length} oportunidades desde listados`,
+      `Crawl profundo: ${candidates.length} oportunidades desde listados${
+        portalHits > 0 ? ` · parsers portal: ${portalHits}` : ""
+      }`,
       candidates
         .slice(0, 10)
         .map((c, i) => `  ${i + 1}. ${truncate(c.title, 60)}\n     ${truncateUrl(c.url)}`)
@@ -1601,6 +2047,201 @@ export class Executor {
       out.push(c);
     }
     return out;
+  }
+
+  /**
+   * Depth-2: from already-fetched opportunity pages, harvest a few related deep links
+   * (bounded — max 16 new URLs) when the page still looks like a mini-listing or hub.
+   */
+  private async expandDepth2Related(
+    ranked: RankedSource[],
+    maxSources: number,
+    spec: AgentSpec,
+    sessions: CredentialIndex,
+    scraperOptions: ScraperOptions | undefined,
+    progress: (phase: ProgressEvent["phase"], percent: number, message: string) => void,
+    log: ActionLogger
+  ): Promise<RankedSource[]> {
+    if (ranked.length >= maxSources) return ranked;
+    const seen = new Set(ranked.map((r) => normalizeUrl(r.url)));
+    const depth2Cap = Math.min(16, Math.max(6, Math.floor(maxSources / 8)));
+    const candidates: RankedSource[] = [];
+
+    // Prefer pages that already have HTML and look expandable (related calls, hub crumbs).
+    const seeds = ranked
+      .filter(
+        (r) =>
+          r.rawHtml &&
+          r.rawHtml.length > 1500 &&
+          (isExpandableListingPage(r.url, r.rawHtml) ||
+            /listing deep-link|pagination|portal seed|rss feed/i.test(r.rankReason || r.snippet || ""))
+      )
+      .slice(0, 8);
+
+    for (const src of seeds) {
+      if (!src.rawHtml) continue;
+      const links = extractOpportunityDeepLinks(src.rawHtml, src.url, 12);
+      for (const link of links) {
+        const key = normalizeUrl(link.url);
+        if (seen.has(key)) continue;
+        // Skip same-page anchors / near-identical paths
+        if (key === normalizeUrl(src.url)) continue;
+        seen.add(key);
+        candidates.push({
+          title: link.title,
+          url: link.url,
+          snippet: `Depth-2 related from: ${src.url}`,
+          relevance: 72,
+          fetchPriority: "medium",
+          rankReason: "Depth-2 related opportunity",
+        });
+        if (candidates.length >= depth2Cap) break;
+      }
+      if (candidates.length >= depth2Cap) break;
+    }
+
+    if (candidates.length === 0) return ranked;
+
+    this.runHealth.depth2Count += candidates.length;
+    log(
+      LogAction.WEB_SEARCH,
+      `Profundidad-2: ${candidates.length} enlaces relacionados`,
+      candidates
+        .slice(0, 8)
+        .map((c, i) => `  ${i + 1}. ${truncate(c.title, 55)}\n     ${truncateUrl(c.url)}`)
+        .join("\n"),
+      "searching"
+    );
+    progress("searching", 28, `Profundidad-2: ${candidates.length} páginas…`);
+
+    const toFetch = candidates.slice(0, Math.min(candidates.length, depth2Cap));
+    const fetched = await this.enrichRanked(
+      toFetch,
+      toFetch,
+      spec,
+      sessions,
+      scraperOptions,
+      progress,
+      log
+    );
+
+    const merged = [...fetched, ...ranked];
+    const out: RankedSource[] = [];
+    const seenMerged = new Set<string>();
+    for (const c of merged) {
+      if (out.length >= maxSources) break;
+      const key = normalizeUrl(c.url);
+      if (seenMerged.has(key)) continue;
+      seenMerged.add(key);
+      out.push(c);
+    }
+    return out;
+  }
+
+  /**
+   * Mid-run gap-fill: if requested regions have zero URLs after expand, inject
+   * region portal seeds, fetch them, and expand listings once more (bounded).
+   * Exhaustive runs get a larger seed pick + optional second pass if gaps remain.
+   */
+  private async gapFillUncoveredRegions(
+    ranked: RankedSource[],
+    maxSources: number,
+    spec: AgentSpec,
+    sessions: CredentialIndex,
+    scraperOptions: ScraperOptions | undefined,
+    progress: (phase: ProgressEvent["phase"], percent: number, message: string) => void,
+    log: ActionLogger,
+    opts?: { exhaustive?: boolean; phase?: BudgetPhase }
+  ): Promise<RankedSource[]> {
+    if (!isGrantTarget(spec) && !isCurationOpportunityTarget(spec)) return ranked;
+
+    const requested = requestedRegionsForSpec(spec.prompt || "", spec.filters.criteria || "");
+    let gaps = uncoveredRegions(
+      ranked.map((r) => r.url),
+      requested
+    );
+    if (gaps.length === 0) return ranked;
+
+    const runPass = async (
+      current: RankedSource[],
+      passGaps: string[],
+      pickCap: number
+    ): Promise<RankedSource[]> => {
+      const seen = new Set(current.map((r) => normalizeUrl(r.url)));
+      const seeds = grantPortalSeedsForRegions(passGaps).filter(
+        (s) => !seen.has(normalizeUrl(s.url))
+      );
+      const pick = seeds.slice(0, pickCap);
+      if (pick.length === 0) return current;
+
+      this.runHealth.gapFillCount += pick.length;
+      this.runHealth.seedCount += pick.length;
+      log(
+        LogAction.WEB_SEARCH,
+        `Gap-fill regional: ${passGaps.join(", ")} → ${pick.length} portales`,
+        pick.map((p) => `  → ${p.title} (${truncateUrl(p.url)})`).join("\n"),
+        "searching"
+      );
+      progress(
+        "searching",
+        29,
+        `Gap-fill: cubriendo ${passGaps.slice(0, 4).join(", ")}…`
+      );
+
+      const candidates: RankedSource[] = pick.map((s) => ({
+        title: s.title,
+        url: s.url,
+        snippet: s.snippet || `Gap-fill portal (${passGaps.join(",")})`,
+        relevance: 88,
+        fetchPriority: "high" as const,
+        rankReason: `Gap-fill region: ${passGaps.join(",")}`,
+      }));
+
+      let next = await this.enrichRanked(
+        [...candidates, ...current],
+        candidates,
+        spec,
+        sessions,
+        scraperOptions,
+        progress,
+        log
+      );
+      next = await this.expandListingPages(
+        next,
+        maxSources,
+        spec,
+        sessions,
+        scraperOptions,
+        progress,
+        log,
+        { exhaustive: opts?.exhaustive, gapCount: passGaps.length }
+      );
+      return next;
+    };
+
+    const baseCap = opts?.exhaustive
+      ? Math.min(24, Math.max(10, gaps.length * 4))
+      : Math.min(16, Math.max(6, gaps.length * 3));
+    let next = await runPass(ranked, gaps, baseCap);
+
+    // Second pass when exhaustive and still missing regions (bounded).
+    if (opts?.exhaustive && opts.phase !== "critical") {
+      gaps = uncoveredRegions(
+        next.map((r) => r.url),
+        requested
+      );
+      if (gaps.length > 0) {
+        log(
+          LogAction.INFO,
+          `Gap-fill 2ª pasada (exhaustivo): ${gaps.join(", ")}`,
+          undefined,
+          "searching"
+        );
+        next = await runPass(next, gaps, Math.min(12, gaps.length * 3));
+      }
+    }
+
+    return next;
   }
 
   private async criticPass(
@@ -1733,6 +2374,8 @@ export class Executor {
     const truncated = sliceContentForExtract(content, cfg.extractContentChars, result.url, spec);
     const grant = isGrantTarget(spec) || isCurationOpportunityTarget(spec);
     const realEstate = isRealEstateTarget(spec);
+    const portalPrefill = grant ? extractPortalDetails(content, result.url) : null;
+    const portalHints = formatPortalDetailHints(portalPrefill);
     const systemPrompt = grant
       ? `Extract an OPEN opportunity (grant/funding, fellowship/program, award/competition, or exposure call) from this page. Return JSON: ${schema.join(", ")}.
 Rules:
@@ -1747,6 +2390,7 @@ Rules:
 - url: direct link to apply or official call page (deep link, not bare homepage)
 - category: Funding | Programs & Fellowships | Awards & Competitions | Exposure when clear
 - If not a specific open opportunity, set score below 40
+- When "Structured fields already parsed" are provided, use them for matching keys unless the page clearly contradicts them.
 Source URL: ${result.url}`
       : realEstate
         ? `Extract a Spanish real-estate listing (casa/chalet/masía/piso) from this page. Return JSON: ${schema.join(", ")}.
@@ -1774,7 +2418,9 @@ Source URL: ${result.url}`;
           },
           {
             role: "user",
-            content: `Title: ${result.title}\nSnippet: ${result.snippet}\n\nContent:\n${truncated}`,
+            content: `Title: ${result.title}\nSnippet: ${result.snippet}${
+              portalHints ? `\n\n${portalHints}` : ""
+            }\n\nContent:\n${truncated}`,
           },
         ],
         {
@@ -1812,16 +2458,26 @@ Source URL: ${result.url}`;
         if (!parsed.description && result.snippet) parsed.description = result.snippet;
         if (!parsed.summary && result.snippet) parsed.summary = result.snippet;
       }
+
+      if (grant && portalDetailHasSignal(portalPrefill)) {
+        this.runHealth.portalDetailCount += 1;
+        return mergePortalDetails(parsed as Record<string, unknown>, portalPrefill) as ExtractedItem;
+      }
       return parsed;
     } catch {
       const ranked = result as SearchResult & { rankReason?: string };
-      return {
+      const fallback: ExtractedItem = {
         title: result.title,
         url: result.url,
         description: result.snippet,
         summary: result.snippet,
         reason: ranked.rankReason || result.snippet || "Extraction fallback",
       };
+      if (grant && portalDetailHasSignal(portalPrefill)) {
+        this.runHealth.portalDetailCount += 1;
+        return mergePortalDetails(fallback as Record<string, unknown>, portalPrefill) as ExtractedItem;
+      }
+      return fallback;
     }
   }
 
@@ -1967,7 +2623,11 @@ function engineLabel(id: SearchEngineId): string {
   if (id === "mojeek") return "Mojeek";
   if (id === "duckduckgo-html") return "DDG";
   if (id === "duckduckgo-lite") return "DDG-Lite";
-  return "Bing";
+  if (id === "brave-api") return "Brave API";
+  if (id === "brave") return "Brave HTML";
+  if (id === "ecosia") return "Ecosia";
+  if (id === "bing") return "Bing";
+  return id;
 }
 
 function resolveSearchLocale(spec: AgentSpec): string {
@@ -1987,27 +2647,35 @@ function resolveSearchLocale(spec: AgentSpec): string {
 }
 
 function normalizeUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-    return u.toString().replace(/\/$/, "");
-  } catch {
-    return url.trim().toLowerCase();
-  }
+  return canonicalUrl(url) || url.trim().toLowerCase();
 }
 
 function dedupeItems(items: ExtractedItem[], fields: string[]): ExtractedItem[] {
-  const seen = new Set<string>();
+  const seenUrl = new Set<string>();
+  const seenContent = new Set<string>();
   return items.filter((item) => {
-    const values = fields.map((f) => String(item[f] ?? "").trim());
-    const allEmpty = values.every((v) => !v);
-    const key = allEmpty
-      ? `url:${String(item.url ?? item.link ?? "").trim().toLowerCase()}`
-      : values.every((v) => v.length > 0)
-        ? values.map((v) => v.toLowerCase()).join("|")
-        : `url:${String(item.url ?? item.link ?? "").trim().toLowerCase()}|${values.join("|")}`;
-    if (!key || key === "url:" || seen.has(key)) return false;
-    seen.add(key);
+    const urlKey = normalizeUrl(String(item.url ?? item.link ?? ""));
+    const contentKey = opportunityContentKey(item);
+
+    // Primary: canonical URL
+    if (urlKey) {
+      if (seenUrl.has(urlKey)) return false;
+      seenUrl.add(urlKey);
+    }
+
+    // Secondary: same org+program(+deadline) across different portals
+    if (contentKey && contentKey.split("|").filter(Boolean).length >= 2) {
+      if (seenContent.has(contentKey)) return false;
+      seenContent.add(contentKey);
+    }
+
+    // Fallback to configured fields when URL/content keys are weak
+    if (!urlKey && !contentKey) {
+      const values = fields.map((f) => String(item[f] ?? "").trim());
+      const key = values.map((v) => v.toLowerCase()).join("|");
+      if (!key || seenUrl.has(`f:${key}`)) return false;
+      seenUrl.add(`f:${key}`);
+    }
     return true;
   });
 }
