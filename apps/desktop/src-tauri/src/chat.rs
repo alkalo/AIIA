@@ -659,6 +659,7 @@ pub fn draft_agent_from_prompt(name: &str, prompt: &str) -> AgentSpec {
         prompt: prompt.to_string(),
         template_id: Some("custom".to_string()),
         opportunity_subtype: None,
+        content_mode: None,
         context_attachments: None,
         search: SearchConfig {
             queries: vec![prompt.chars().take(120).collect()],
@@ -674,6 +675,9 @@ pub fn draft_agent_from_prompt(name: &str, prompt: &str) -> AgentSpec {
                 enabled: true,
                 fields: vec!["title".to_string(), "url".to_string()],
             },
+            max_age_days: None,
+            min_days_remaining: None,
+            require_verification: None,
         },
         output: OutputConfig {
             schema: vec![
@@ -690,6 +694,7 @@ pub fn draft_agent_from_prompt(name: &str, prompt: &str) -> AgentSpec {
         schedule: ScheduleConfig {
             interval_minutes: 1440,
             only_when_running: true,
+            cloud_enabled: false,
             timezone: "UTC".to_string(),
         },
         effort: EffortLevel::Medium,

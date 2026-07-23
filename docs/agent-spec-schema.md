@@ -11,12 +11,38 @@
     "prompt": { "type": "string", "minLength": 1 },
     "templateId": {
       "type": "string",
-      "enum": ["job-search", "candidate-search", "supplier-search", "opportunities", "custom"]
+      "enum": [
+        "web-research",
+        "opportunities",
+        "people-orgs",
+        "monitoring",
+        "custom",
+        "job-search",
+        "candidate-search",
+        "supplier-search"
+      ]
     },
     "opportunitySubtype": {
       "type": "string",
-      "enum": ["jobs", "grants", "tenders", "events", "deals", "real_estate", "custom"],
-      "description": "Subtipo para plantilla opportunities: empleo, subvenciones, inmobiliario, etc."
+      "enum": [
+        "jobs",
+        "grants",
+        "programs",
+        "awards",
+        "exposure",
+        "sector_news",
+        "tenders",
+        "events",
+        "deals",
+        "real_estate",
+        "custom"
+      ],
+      "description": "jobs | funding(grants) | programs | awards | exposure | sector_news | …"
+    },
+    "contentMode": {
+      "type": "string",
+      "enum": ["auto", "opportunities", "sector_news", "wrap"],
+      "description": "High-level curation mode; inferred when omitted"
     },
     "search": {
       "type": "object",
@@ -43,7 +69,9 @@
             },
             "required": ["siteId", "credentialRef"]
           }
-        }
+        },
+        "maxSources": { "type": "integer", "minimum": 1 },
+        "maxResultsPerQuery": { "type": "integer", "minimum": 1 }
       }
     },
     "filters": {
@@ -58,7 +86,10 @@
             "enabled": { "type": "boolean" },
             "fields": { "type": "array", "items": { "type": "string" } }
           }
-        }
+        },
+        "maxAgeDays": { "type": "integer", "minimum": 1, "description": "News freshness window" },
+        "minDaysRemaining": { "type": "integer", "minimum": 0, "description": "Min days until opportunity deadline" },
+        "requireVerification": { "type": "boolean" }
       }
     },
     "output": {
@@ -68,11 +99,12 @@
         "schema": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "destinations": {
           "type": "array",
-          "items": { "type": "string", "enum": ["inbox", "excel", "csv"] }
+          "items": { "type": "string", "enum": ["inbox", "excel", "csv", "email"] }
         },
         "excelPath": { "type": "string" },
         "excelMode": { "type": "string", "enum": ["new_file", "update_same"] },
-        "notify": { "type": "boolean" }
+        "notify": { "type": "boolean" },
+        "emailTo": { "type": "string", "description": "Suggested To for copy-paste wrap (never auto-sent)" }
       }
     },
     "schedule": {
@@ -81,10 +113,14 @@
       "properties": {
         "intervalMinutes": { "type": "integer", "minimum": 15 },
         "onlyWhenRunning": { "type": "boolean" },
+        "cloudEnabled": {
+          "type": "boolean",
+          "description": "Gemini only: run on AIIA Cloud cron (PC can be off). Results sync when app opens."
+        },
         "timezone": { "type": "string" }
       }
     },
-    "effort": { "type": "string", "enum": ["low", "medium", "high", "super_high"] },
+    "effort": { "type": "string", "enum": ["low", "medium", "high", "super_high", "ultra_high"] },
     "retentionDays": { "type": "integer", "minimum": 1, "default": 90 },
     "status": {
       "type": "string",

@@ -16,7 +16,10 @@ AIIA/
 │   ├── scraper/
 │   ├── agent-runner/
 │   └── chat-tools/         # tools del chat (si existe como package)
+├── services/
+│   └── cloud-scheduler/    # Cron Gemini opcional (PC apagado; Blueprint Render free)
 ├── landing/                # Render static site
+├── render.yaml             # Blueprint: landing + aiia-cloud (free)
 └── docs/                   # BMAD + specs
 ```
 
@@ -39,7 +42,9 @@ npm run build:packages     # compilar packages TS
 - Modelo Ollama = el más potente que aguante el HW del usuario (modo local)
 - Provider: `local` (default) | `gemini` (API key en Ajustes, DPAPI)
 - Chat y runs de agentes comparten el mismo provider; pueden solaparse
-- Fuera de alcance: plugins, GPT store, cloud sync de datos, visión/imagen cloud de terceros
+- Curation: opportunities (funding/programs/awards/exposure) + sector news — `docs/epics/e11-opportunities-news.md`
+- Cron cloud opcional solo para agentes Gemini (`schedule.cloudEnabled`) — ver `docs/architecture-cloud-cron.md`
+- Fuera de alcance: plugins, GPT store, cloud sync genérico de chats/datos, visión/imagen cloud de terceros
 
 ## Para Cursor
 - Leer `docs/agent-spec-schema.md` antes de tocar agent-engine

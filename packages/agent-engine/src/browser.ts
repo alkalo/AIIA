@@ -25,9 +25,12 @@ export {
 export { isClosingSoon } from "./deadline.js";
 export {
   resolveOpportunitySubtype,
+  resolveContentMode,
   isGrantTarget,
   isJobTarget,
   isRealEstateTarget,
+  isSectorNewsTarget,
+  isCurationOpportunityTarget,
   isOpportunityCardView,
 } from "./opportunity-subtype.js";
 export {
@@ -35,3 +38,8 @@ export {
   isNewsletterWrapTarget,
   isFreshEnough,
 } from "./newsletter.js";
+export {
+  applyCurationPipeline,
+  itemFingerprint,
+  classifyItemKind,
+} from "./curation.js";

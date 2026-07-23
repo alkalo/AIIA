@@ -79,6 +79,12 @@ import {
 } from "./result-quality.js";
 import { sectorExpansionQueries, jobPortalDeepLinkSeeds } from "./sector-sources.js";
 import { grantExpansionQueries, grantSeedQueries, grantPortalDeepLinkSeeds } from "./grant-sources.js";
+import { isNewsletterWrapTarget } from "./newsletter.js";
+import { flattenWrapLaneQueries } from "./wrap-lanes.js";
+import { sectorNewsQueryPack, sectorNewsPortalSeeds } from "./news-sources.js";
+import { opportunityDiscoveryQueries } from "./opportunity-lanes.js";
+import { applyCurationPipeline, collectKnownFingerprints } from "./curation.js";
+import { readdir } from "node:fs/promises";
 import {
   realEstateExpansionQueries,
   realEstateSeedQueries,
@@ -90,8 +96,40 @@ import {
   isBarePortalHomepage,
   isRelevantRealEstateHit,
 } from "./real-estate-sources.js";
-import { isGrantTarget, isJobTarget, isRealEstateTarget } from "./opportunity-subtype.js";
+import {
+  isGrantTarget,
+  isJobTarget,
+  isRealEstateTarget,
+  isSectorNewsTarget,
+  isCurationOpportunityTarget,
+  isProgramsTarget,
+  isAwardsTarget,
+  isExposureTarget,
+  resolveContentMode,
+} from "./opportunity-subtype.js";
 import { sortByDeadlineAsc } from "./deadline.js";
+
+async function loadPriorFingerprints(dataDir: string, agentId: string): Promise<Set<string>> {
+  const dir = join(dataDir, "inbox", agentId);
+  const prior: ExtractedItem[] = [];
+  try {
+    const files = await readdir(dir);
+    for (const f of files) {
+      if (!f.endsWith(".json") || f.includes("-report")) continue;
+      try {
+        const raw = JSON.parse(await readFile(join(dir, f), "utf-8")) as {
+          results?: ExtractedItem[];
+        };
+        if (Array.isArray(raw.results)) prior.push(...raw.results);
+      } catch {
+        /* skip bad file */
+      }
+    }
+  } catch {
+    /* no prior inbox */
+  }
+  return collectKnownFingerprints(prior, true);
+}
 
 const GRANT_WAVE_FALLBACKS = [
   "community grant australia open deadline",
@@ -360,6 +398,41 @@ export class Executor {
       const reSeeds = realEstateSeedQueries(spec, Math.max(12, cfg.queryExpansion + 6));
       queries = sanitizeSiteQueries(reSeeds, REAL_ESTATE_ALLOWED_HOSTS);
     }
+    if (isNewsletterWrapTarget(spec)) {
+      // Studio-style lanes: grants/policy, social enterprise, NGO/philanthropy, ESG.
+      const lanes = flattenWrapLaneQueries(spec.prompt, Math.max(20, cfg.queryExpansion + 12));
+      queries = [...new Set([...lanes, ...queries])].slice(0, Math.max(24, lanes.length));
+      log(
+        LogAction.INFO,
+        `Wrap multi-lane: ${lanes.length} consultas (grants / SE / NGO / ESG)`,
+        undefined,
+        "planning"
+      );
+    }
+    if (isSectorNewsTarget(spec) && !isNewsletterWrapTarget(spec)) {
+      const newsQ = sectorNewsQueryPack(spec.prompt, Math.max(16, cfg.queryExpansion + 8));
+      queries = [...new Set([...newsQ, ...queries])].slice(0, Math.max(20, newsQ.length));
+      log(LogAction.INFO, `Sector news: ${newsQ.length} consultas`, undefined, "planning");
+    }
+    if (isCurationOpportunityTarget(spec) && !isNewsletterWrapTarget(spec)) {
+      const cat = isProgramsTarget(spec)
+        ? "program_fellowship"
+        : isAwardsTarget(spec)
+          ? "award_competition"
+          : isExposureTarget(spec)
+            ? "exposure"
+            : resolveContentMode(spec) === "opportunities"
+              ? "all"
+              : "funding";
+      const oppQ = opportunityDiscoveryQueries(spec.prompt, cat, Math.max(18, cfg.queryExpansion + 10));
+      queries = [...new Set([...oppQ, ...queries])].slice(0, Math.max(24, oppQ.length));
+      log(
+        LogAction.INFO,
+        `Opportunity discovery (${cat}): ${oppQ.length} consultas`,
+        undefined,
+        "planning"
+      );
+    }
 
     const searchLocale = resolveSearchLocale(spec);
     this.searchLocale = searchLocale;
@@ -393,6 +466,18 @@ export class Executor {
           "searching"
         );
       }
+    }
+    if (isSectorNewsTarget(spec)) {
+      const portals = sectorNewsPortalSeeds();
+      for (const s of portals) {
+        seedSources.push({ title: s.title, url: s.url, snippet: s.snippet });
+      }
+      log(
+        LogAction.WEB_SEARCH,
+        `Semillas de portales de news: ${portals.length}`,
+        portals.map((p) => `  → ${p.title} (${truncateUrl(p.url)})`).join("\n"),
+        "searching"
+      );
     }
     if (isRealEstateTarget(spec)) {
       const portals = realEstatePortalDeepLinkSeeds(spec);
@@ -1033,8 +1118,37 @@ export class Executor {
       }
     }
 
+    // Quality curation: verify dates/URLs, freshness for news, editorial boost, cross-run dedupe
+    if (
+      isCurationOpportunityTarget(spec) ||
+      isSectorNewsTarget(spec) ||
+      isNewsletterWrapTarget(spec) ||
+      spec.filters.requireVerification
+    ) {
+      const known = await loadPriorFingerprints(dataDir, spec.id);
+      const beforeCur = finalItems.length;
+      const { kept, dropped } = applyCurationPipeline(finalItems, spec, {
+        knownFingerprints: known,
+        minDaysRemaining: spec.filters.minDaysRemaining,
+        maxNewsAgeDays: spec.filters.maxAgeDays,
+      });
+      finalItems = kept;
+      const reasons = new Map<string, number>();
+      for (const d of dropped) {
+        reasons.set(d.reason, (reasons.get(d.reason) ?? 0) + 1);
+      }
+      log(
+        LogAction.FILTER,
+        `Curation: ${beforeCur} → ${finalItems.length} (dropped ${dropped.length})`,
+        formatBulletList(
+          [...reasons.entries()].map(([r, n]) => `${r}: ${n}`)
+        ),
+        "filtering"
+      );
+    }
+
     finalItems.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-    if (isGrantTarget(spec)) {
+    if (isGrantTarget(spec) || isCurationOpportunityTarget(spec)) {
       finalItems = sortByDeadlineAsc(finalItems);
     }
 

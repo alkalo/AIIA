@@ -55,7 +55,7 @@ impl AgentScheduler {
             let db = db.clone();
             let on_run = on_run.clone();
             Box::pin(async move {
-                if let Ok(agents) = db.get_due_agents() {
+                if let Ok(agents) = db.get_due_local_agents() {
                     for agent in agents {
                         on_run(agent.id.clone());
                     }

@@ -46,8 +46,20 @@
 - E8-S4: Python acotado (timeout)
 - Fuera: plugins, GPT store, cloud
 
-# Epic 9: BFGN Grants & Impact News wrap — **In progress**
+# Epic 9: BFGN Grants & Impact News wrap — **Done (core)**
 - E9-S1: Copy-ready wrap text (no SMTP) + Inbox review/copy gate
 - E9-S2: Example prompt + docs
-- E9-S3: (optional later) multi-lane research lanes 1A–1D
+- E9-S3: Multi-lane research (grants / SE / NGO / ESG) + editor maxSources / per-query top-N
+
+# Epic 10: Cloud cron Gemini — **Done (scaffold)**
+- E10-S1: `schedule.cloudEnabled` + local scheduler skip
+- E10-S2: `services/cloud-scheduler` worker + desktop push/pull
+- E10-S3: Settings UI + Dashboard Push to Cloud + sync on app open
+- Docs: `docs/architecture-cloud-cron.md`
+
+# Epic 11: Opportunities + Sector news curation — **Done**
+- E11-S1: Taxonomía programs/awards/exposure/sector_news + contentMode
+- E11-S2: Curation pipeline (verify, freshness, exclude, fingerprint, editorial score)
+- E11-S3: Inbox review queue (pending/approve/reject/archive)
+- Docs: `docs/epics/e11-opportunities-news.md` + example prompts
 

@@ -64,19 +64,24 @@ Sidebar estilo ChatGPT: historial de chats + enlaces a Agentes / Inbox / Runs / 
 3. Usuario edita → pending_review → approve → published vN
 
 ## Flujo de ejecución de agentes
-1. Scheduler detecta agente due → spawn agent-runner con env `AIIA_LLM_PROVIDER` (+ key Gemini si aplica)
-2. Search → Extract → Filter → Dedupe → Store → Export
-3. Notificación + inbox update
-4. Puede solaparse con una sesión de Chat (sin mutex global)
+1. **Local (Ollama o Gemini sin cloud):** Scheduler del desktop detecta due → spawn agent-runner (PC debe estar encendido / app abierta si `onlyWhenRunning`).
+2. **Cloud (solo Gemini + `schedule.cloudEnabled`):** `services/cloud-scheduler` corre el cron en la nube; el PC puede estar apagado. Al abrir AIIA → `pull_cloud_runs` → Inbox.
+3. Search → Extract → Filter → Dedupe → Store → Export
+4. Notificación + inbox update
+5. Puede solaparse con una sesión de Chat (sin mutex global)
+
+Detalle: [`docs/architecture-cloud-cron.md`](architecture-cloud-cron.md).
 
 ## Almacenamiento
 - SQLite en `%APPDATA%/AIIA/aiia.db`
 - Clave DB derivada + DPAPI
 - Credenciales de sitios + API key Gemini (`site_id=aiia.gemini`): tabla `credentials` con blob cifrado
 - Setting `ai_provider` = `local` | `gemini`
+- Settings cloud: `cloud_base_url`, `cloud_token`, `cloud_last_sync_at`
 - Chats: tablas `chats`, `chat_messages`, `chat_artifacts`
 - Artifacts de chat: ficheros bajo `%APPDATA%/AIIA/chat-artifacts/`
 
 ## Distribución
 - `landing/` → Render static site
+- `services/cloud-scheduler/` → worker opcional (Render/Fly/VPS) para cron Gemini
 - GitHub Actions → `tauri build` → MSI en Releases

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Chat } from "./pages/Chat";
@@ -9,6 +9,7 @@ import { Inbox } from "./pages/Inbox";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
 import { Onboarding } from "./pages/Onboarding";
+import { api } from "./api";
 import "./App.css";
 import "./i18n";
 
@@ -16,6 +17,12 @@ function App() {
   const [onboarded, setOnboarded] = useState(
     () => localStorage.getItem("aiia-onboarded") === "1"
   );
+
+  useEffect(() => {
+    if (!onboarded) return;
+    // Pull Gemini cloud cron results when the app opens (no-op if not configured).
+    void api.pullCloudRuns().catch(() => undefined);
+  }, [onboarded]);
 
   const completeOnboarding = () => {
     localStorage.setItem("aiia-onboarded", "1");

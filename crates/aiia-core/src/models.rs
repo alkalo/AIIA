@@ -47,6 +47,8 @@ pub struct AgentSpec {
     pub template_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "opportunity_subtype")]
     pub opportunity_subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "content_mode")]
+    pub content_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "context_attachments")]
     pub context_attachments: Option<Vec<PromptAttachment>>,
     pub search: SearchConfig,
@@ -109,6 +111,12 @@ pub struct FilterConfig {
     pub min_score: f64,
     #[serde(default)]
     pub dedupe: DedupeConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "max_age_days")]
+    pub max_age_days: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "min_days_remaining")]
+    pub min_days_remaining: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "require_verification")]
+    pub require_verification: Option<bool>,
 }
 
 fn default_min_score() -> f64 {
@@ -156,6 +164,9 @@ pub struct ScheduleConfig {
     pub interval_minutes: i32,
     #[serde(default = "default_true", alias = "only_when_running")]
     pub only_when_running: bool,
+    /// When true, AIIA Cloud runs the agent on a schedule (Gemini only); desktop syncs later.
+    #[serde(default, alias = "cloud_enabled")]
+    pub cloud_enabled: bool,
     #[serde(default = "default_timezone")]
     pub timezone: String,
 }

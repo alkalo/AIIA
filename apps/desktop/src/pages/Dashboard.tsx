@@ -330,6 +330,22 @@ export function Dashboard() {
                     >
                       {t("dashboard.pause")}
                     </button>
+                    {agent.spec.schedule?.cloudEnabled && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline"
+                        onClick={() =>
+                          void api
+                            .pushAgentToCloud(agent.id)
+                            .then((m) => window.alert(m))
+                            .catch((e) =>
+                              window.alert(e instanceof Error ? e.message : String(e))
+                            )
+                        }
+                      >
+                        {t("dashboard.pushCloud")}
+                      </button>
+                    )}
                   </>
                 )}
                 {(agent.spec.status === "paused" || agent.spec.status === "error") && (

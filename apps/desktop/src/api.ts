@@ -238,6 +238,16 @@ export const api = {
       "get_latest_newsletter",
       { agentId }
     ),
+  getCloudStatus: () =>
+    invoke<{ configured: boolean; baseUrl: string; lastSyncAt?: string | null }>("get_cloud_status"),
+  setCloudConfig: (baseUrl: string, token: string) =>
+    invoke<{ configured: boolean; baseUrl: string; lastSyncAt?: string | null }>("set_cloud_config", {
+      baseUrl,
+      token,
+    }),
+  pushAgentToCloud: (agentId: string) => invoke<string>("push_agent_to_cloud", { agentId }),
+  pullCloudRuns: () =>
+    invoke<{ imported: number; message: string }>("pull_cloud_runs"),
   syncLatestRunResults: (agentId: string) =>
     invoke<number>("sync_latest_run_results", { agentId }),
   listRuns: (agentId?: string, limit?: number) =>

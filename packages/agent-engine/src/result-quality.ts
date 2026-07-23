@@ -1,5 +1,11 @@
 import type { AgentSpec, ExtractedItem } from "./types.js";
-import { isJobTarget, isGrantTarget, isOpportunityCardView } from "./opportunity-subtype.js";
+import {
+  isJobTarget,
+  isGrantTarget,
+  isOpportunityCardView,
+  isSectorNewsTarget,
+  isCurationOpportunityTarget,
+} from "./opportunity-subtype.js";
 import { isExpiredDeadline } from "./deadline.js";
 
 const JOB_POSTING_URL_PATTERNS = [
@@ -240,7 +246,15 @@ function isDefinitelyNonJobUrl(url: string): boolean {
 export function validateOpportunityResult(item: ExtractedItem, spec: AgentSpec): boolean {
   if (isGarbageExtraction(item)) return false;
 
-  if (isGrantTarget(spec)) {
+  if (isSectorNewsTarget(spec)) {
+    const title = sanitizeFieldValue(item.title ?? item.headline);
+    const url = String(item.url ?? "").trim();
+    if (!title || title.length < 5) return false;
+    if (!/^https?:\/\//i.test(url)) return false;
+    return true;
+  }
+
+  if (isGrantTarget(spec) || isCurationOpportunityTarget(spec)) {
     const normalized = normalizeExtractedItem(item);
     const org = sanitizeFieldValue(
       normalized.organization ?? normalized.organisation ?? normalized.funder
@@ -251,7 +265,9 @@ export function validateOpportunityResult(item: ExtractedItem, spec: AgentSpec):
     const url = resolveOpportunityUrl(normalized as Record<string, unknown>);
     if (!program && !org) return false;
     if (!url && !program) return false;
-    if (url && isLowQualityGrantUrl(url) && !isDirectGrantUrl(url)) return false;
+    if (url && isLowQualityGrantUrl(url) && !isDirectGrantUrl(url) && isGrantTarget(spec)) {
+      return false;
+    }
     if (isExpiredDeadline(normalized.deadline ?? normalized.closing_date)) return false;
 
     const deadline = sanitizeFieldValue(
@@ -262,11 +278,15 @@ export function validateOpportunityResult(item: ExtractedItem, spec: AgentSpec):
         normalized.maxFunding ??
         normalized.amount ??
         normalized.funding_amount ??
-        normalized.fundingAmount
+        normalized.fundingAmount ??
+        normalized.value_or_benefit
     );
     const deep = url ? isDirectGrantUrl(url) : false;
-    // Require a concrete signal: deadline, funding amount, or deep call URL.
-    if (!deadline && !funding && !deep) return false;
+    const rolling = /\b(rolling|ongoing|open now)\b/i.test(
+      `${normalized.status ?? ""} ${normalized.description ?? ""} ${normalized.summary ?? ""}`
+    );
+    // Require a concrete signal: deadline, funding/benefit, deep call URL, or rolling.
+    if (!deadline && !funding && !deep && !rolling) return false;
     return true;
   }
 

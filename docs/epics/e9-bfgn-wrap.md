@@ -25,3 +25,5 @@ Optional `emailTo` is only a **suggested To** note inside the draft — never us
 
 ## Docs
 - Example prompt: `docs/examples/bfgn-monthly-wrap-prompt.md`
+- Multi-lane queries: `packages/agent-engine/src/wrap-lanes.ts`
+- Cloud monthly cron (Gemini, PC off): `docs/architecture-cloud-cron.md`

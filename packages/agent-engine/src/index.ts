@@ -1,4 +1,8 @@
+export * from "./wrap-lanes.js";
 export * from "./newsletter.js";
+export * from "./curation.js";
+export * from "./news-sources.js";
+export * from "./opportunity-lanes.js";
 export * from "./types.js";
 export * from "./templates.js";
 export * from "./attachments.js";
@@ -10,3 +14,4 @@ export * from "./run-logger.js";
 export * from "./search-limits.js";
 export * from "./json-utils.js";
 export * from "./result-quality.js";
+export * from "./opportunity-subtype.js";

@@ -393,6 +393,35 @@ impl Database {
 
     pub fn set_result_feedback(&self, result_id: &str, feedback: &str) -> Result<()> {
         let conn = self.conn.lock().map_err(|_| CoreError::Db(rusqlite::Error::InvalidQuery))?;
+        // Keep review_status inside data_json in sync with feedback for curation queues.
+        let review_status = match feedback {
+            "useful" | "approved" => "approved",
+            "not_useful" | "rejected" => "rejected",
+            "archived" => "archived",
+            _ => "pending",
+        };
+        let data_json: Option<String> = conn
+            .query_row(
+                "SELECT data_json FROM results WHERE id = ?1",
+                params![result_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(raw) = data_json {
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "review_status".into(),
+                        serde_json::Value::String(review_status.into()),
+                    );
+                }
+                let _ = conn.execute(
+                    "UPDATE results SET feedback = ?1, data_json = ?2 WHERE id = ?3",
+                    params![feedback, v.to_string(), result_id],
+                )?;
+                return Ok(());
+            }
+        }
         conn.execute(
             "UPDATE results SET feedback = ?1 WHERE id = ?2",
             params![feedback, result_id],
@@ -707,6 +736,16 @@ impl Database {
                 a.spec.status == AgentStatus::Published
                     && a.next_run_at.map(|t| t <= now).unwrap_or(true)
             })
+            .collect())
+    }
+
+    /// Agents due for the *local* desktop scheduler (app is open).
+    /// Skips cloud-enabled agents — those run on AIIA Cloud.
+    pub fn get_due_local_agents(&self) -> Result<Vec<AgentRecord>> {
+        Ok(self
+            .get_due_agents()?
+            .into_iter()
+            .filter(|a| !a.spec.schedule.cloud_enabled)
             .collect())
     }
 

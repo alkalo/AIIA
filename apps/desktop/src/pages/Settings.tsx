@@ -13,6 +13,91 @@ import { useAiProvider } from "../hooks/useAiProvider";
 
 type WizardStep = "idle" | "plan" | "connect";
 
+function CloudSettingsBlock() {
+  const { t } = useTranslation();
+  const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [lastSync, setLastSync] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api.getCloudStatus().then((s) => {
+      setUrl(s.baseUrl || "");
+      setLastSync(s.lastSyncAt ?? null);
+    });
+  }, []);
+
+  const save = async () => {
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    try {
+      const s = await api.setCloudConfig(url.trim(), token.trim());
+      setMsg(s.configured ? t("settings.cloudSaved") : t("settings.cloudCleared"));
+      setLastSync(s.lastSyncAt ?? null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sync = async () => {
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    try {
+      const r = await api.pullCloudRuns();
+      setMsg(r.message);
+      const s = await api.getCloudStatus();
+      setLastSync(s.lastSyncAt ?? null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <label style={{ display: "block" }}>{t("settings.cloudUrl")}</label>
+      <input
+        className="input"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        placeholder="https://aiia-cloud.onrender.com"
+        style={{ maxWidth: 420 }}
+      />
+      <label style={{ display: "block", marginTop: "0.5rem" }}>{t("settings.cloudToken")}</label>
+      <input
+        className="input"
+        type="password"
+        autoComplete="off"
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        style={{ maxWidth: 420 }}
+      />
+      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
+        <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void save()}>
+          {t("settings.cloudSave")}
+        </button>
+        <button type="button" className="btn btn-sm" disabled={busy || !url.trim()} onClick={() => void sync()}>
+          {t("settings.cloudSyncNow")}
+        </button>
+      </div>
+      {lastSync && (
+        <p className="hint-text" style={{ marginTop: "0.35rem" }}>
+          {t("settings.cloudLastSync", { at: lastSync })}
+        </p>
+      )}
+      {msg && <p className="status-ok" style={{ marginTop: "0.35rem" }}>{msg}</p>}
+      {err && <p className="error-text" style={{ marginTop: "0.35rem" }}>{err}</p>}
+    </div>
+  );
+}
+
 export function Settings() {
   const { t, i18n } = useTranslation();
   const [ollamaOk, setOllamaOk] = useState(false);
@@ -349,6 +434,12 @@ export function Settings() {
         </div>
         {geminiMsg && <p className="status-ok" style={{ marginTop: "0.5rem" }}>{geminiMsg}</p>}
         {geminiErr && <p className="error-text" style={{ marginTop: "0.5rem" }}>{geminiErr}</p>}
+      </div>
+
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <h3>{t("settings.cloudTitle")}</h3>
+        <p className="hint-text">{t("settings.cloudHint")}</p>
+        <CloudSettingsBlock />
       </div>
 
       <div className="card" style={{ marginBottom: "1rem" }}>

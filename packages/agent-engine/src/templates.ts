@@ -148,25 +148,40 @@ export function buildPlannerUserMessage(
   } as unknown as AgentSpec;
   const subtype = resolveOpportunitySubtype(draftSpec);
   const grantHints =
-    subtype === "grants"
+    subtype === "grants" ||
+    subtype === "programs" ||
+    subtype === "awards" ||
+    subtype === "exposure"
       ? lang === "es"
         ? `
-Grant/funding hints:
-- opportunitySubtype: grants
-- output.schema: scope, organization, program_name, description, max_funding, currency, deadline, url, score, reason
-- scope values like NATIONAL, GLOBAL, AU & NZ, EU, ES — infer from user geography
-- queries: use site: on official grant portals and aggregators; NEVER use LinkedIn/Indeed job boards
-- maxSources: 30–50 for grant discovery
-- dedupe fields: organization, program_name`
+Opportunity curation hints:
+- opportunitySubtype: ${subtype} (funding=grants | programs | awards | exposure)
+- Never invent deadlines, amounts, or eligibility. Prefer official application URLs.
+- Exclude jobs, invitation-only, waitlists, events without open call, expired (<7 days).
+- Schema: category, organization, program_name, eligibility, primary_audience, deadline, value_or_benefit, url, score, reason
+- maxSources: 40–80; requireVerification: true; minDaysRemaining: 7`
         : `
-Grant/funding hints:
-- opportunitySubtype: grants
-- output.schema: scope, organization, program_name, description, max_funding, currency, deadline, url, score, reason
-- scope values like NATIONAL, GLOBAL, AU & NZ, EU, ES — infer from user geography
-- queries: use site: on official grant portals and aggregators; NEVER use LinkedIn/Indeed job boards
-- maxSources: 30–50 for grant discovery
-- dedupe fields: organization, program_name`
-      : "";
+Opportunity curation hints:
+- opportunitySubtype: ${subtype} (funding=grants | programs | awards | exposure)
+- Never invent deadlines, amounts, or eligibility. Prefer official application URLs.
+- Exclude jobs, invitation-only, waitlists, events without open call, expired (<7 days).
+- Schema: category, organization, program_name, eligibility, primary_audience, deadline, value_or_benefit, url, score, reason
+- maxSources: 40–80; requireVerification: true; minDaysRemaining: 7`
+      : subtype === "sector_news"
+        ? lang === "es"
+          ? `
+Sector news hints:
+- opportunitySubtype: sector_news; contentMode: sector_news
+- Last ~30 days only; Australian English when AU; real URLs; why_it_may_matter
+- Schema: title, summary, source, publication_date, url, why_it_may_matter, score, reason
+- Do not mix open grants into news results`
+          : `
+Sector news hints:
+- opportunitySubtype: sector_news; contentMode: sector_news
+- Last ~30 days only; Australian English when AU; real URLs; why_it_may_matter
+- Schema: title, summary, source, publication_date, url, why_it_may_matter, score, reason
+- Do not mix open grants into news results`
+        : "";
 
   return `Intent category: ${canonical}
 Inferred opportunity subtype: ${subtype}
@@ -213,12 +228,20 @@ export function fallbackQueries(prompt: string, templateId?: TemplateId): string
   } as unknown as AgentSpec;
   const subtype = resolveOpportunitySubtype(draft);
 
-  if (subtype === "grants") {
+  if (subtype === "grants" || subtype === "programs" || subtype === "awards" || subtype === "exposure") {
     if (core) {
       out.add(`${core} grant application deadline`);
       out.add(`${core} convocatoria abierta`);
+      out.add(`${core} fellowship OR accelerator applications open`);
+      out.add(`${core} award nominations open`);
       out.add(`site:fundsforngos.org ${core}`);
       out.add(`site:ec.europa.eu ${core} funding`);
+    }
+  } else if (subtype === "sector_news") {
+    if (core) {
+      out.add(`${core} news last 30 days`);
+      out.add(`${core} announcement`);
+      out.add(`site:probonoaustralia.com.au ${core}`);
     }
   } else if (subtype === "jobs") {
     if (core) {

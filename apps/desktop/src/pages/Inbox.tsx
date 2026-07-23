@@ -30,7 +30,11 @@ export function Inbox() {
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
-  const [hideDismissed, setHideDismissed] = useState(false);
+  const [hideDismissed, setHideDismissed] = useState(true);
+  const [reviewFilter, setReviewFilter] = useState<"all" | "pending" | "approved" | "rejected" | "archived">(
+    "pending"
+  );
+  const [kindFilter, setKindFilter] = useState<"all" | "opportunity" | "news">("all");
   const [wrapBody, setWrapBody] = useState<string>("");
   const [wrapPath, setWrapPath] = useState<string>("");
   const [wrapReviewed, setWrapReviewed] = useState(false);
@@ -117,10 +121,50 @@ export function Inbox() {
   const visibleResults = useMemo(() => {
     let list = results;
     if (hideDismissed) {
-      list = list.filter((r) => r.feedback !== "not_useful");
+      list = list.filter((r) => r.feedback !== "not_useful" && r.feedback !== "rejected");
+    }
+    if (reviewFilter !== "all") {
+      list = list.filter((r) => {
+        const status = String(
+          (r.data as { review_status?: string })?.review_status ??
+            (r.feedback === "useful" || r.feedback === "approved"
+              ? "approved"
+              : r.feedback === "not_useful" || r.feedback === "rejected"
+                ? "rejected"
+                : r.feedback === "archived"
+                  ? "archived"
+                  : "pending")
+        );
+        return status === reviewFilter;
+      });
+    }
+    if (kindFilter !== "all") {
+      list = list.filter((r) => {
+        const kind = String((r.data as { item_kind?: string })?.item_kind ?? "").toLowerCase();
+        if (kindFilter === "news") return kind === "news";
+        if (kindFilter === "opportunity") return kind === "opportunity" || !kind;
+        return true;
+      });
     }
     return list;
-  }, [results, hideDismissed]);
+  }, [results, hideDismissed, reviewFilter, kindFilter]);
+
+  const reviewCounts = useMemo(() => {
+    const counts = { pending: 0, approved: 0, rejected: 0, archived: 0 };
+    for (const r of results) {
+      const status =
+        String((r.data as { review_status?: string })?.review_status ?? "") ||
+        (r.feedback === "useful" || r.feedback === "approved"
+          ? "approved"
+          : r.feedback === "not_useful" || r.feedback === "rejected"
+            ? "rejected"
+            : r.feedback === "archived"
+              ? "archived"
+              : "pending");
+      if (status in counts) counts[status as keyof typeof counts] += 1;
+    }
+    return counts;
+  }, [results]);
 
   const downloadFormats = useMemo<Array<"csv" | "excel" | "json">>(() => {
     const selected = agents.find((a) => a.id === filterAgent);
@@ -178,13 +222,34 @@ export function Inbox() {
     }
   };
 
-  const handleFeedback = async (resultId: string, feedback: "useful" | "not_useful") => {
+  const handleFeedback = async (
+    resultId: string,
+    feedback: "useful" | "not_useful" | "approved" | "rejected" | "archived"
+  ) => {
+    const mapped =
+      feedback === "approved"
+        ? "useful"
+        : feedback === "rejected"
+          ? "not_useful"
+          : feedback;
+    const reviewStatus =
+      feedback === "useful" || feedback === "approved"
+        ? "approved"
+        : feedback === "not_useful" || feedback === "rejected"
+          ? "rejected"
+          : feedback === "archived"
+            ? "archived"
+            : "pending";
     const result = results.find((r) => r.id === resultId);
     setResults((prev) =>
-      prev.map((r) => (r.id === resultId ? { ...r, feedback } : r))
+      prev.map((r) =>
+        r.id === resultId
+          ? { ...r, feedback: mapped, data: { ...r.data, review_status: reviewStatus } }
+          : r
+      )
     );
     try {
-      await api.setResultFeedback(resultId, feedback);
+      await api.setResultFeedback(resultId, mapped);
     } catch (e) {
       setResults((prev) =>
         prev.map((r) => (r.id === resultId ? { ...r, feedback: result?.feedback } : r))
@@ -193,7 +258,7 @@ export function Inbox() {
       return;
     }
 
-    if (result && feedback === "not_useful") {
+    if (result && mapped === "not_useful") {
       void autoImproveAgent(result);
     }
   };
@@ -220,7 +285,10 @@ export function Inbox() {
 
   const rebuildWrapFromResults = () => {
     if (!selectedAgent) return;
-    const items = visibleResults.map((r) => ({ ...r.data, score: r.score ?? r.data.score }));
+    const items = visibleResults.map((r) => ({
+      ...(r.data as Record<string, string | number | undefined>),
+      score: (r.score ?? r.data.score) as number | undefined,
+    }));
     if (items.length === 0) {
       window.alert(t("inbox.wrapEmpty"));
       return;
@@ -267,6 +335,39 @@ export function Inbox() {
             ))}
           </select>
           <span className="hint-text">{t("inbox.count", { count: visibleResults.length })}</span>
+          <select
+            className="input"
+            value={reviewFilter}
+            onChange={(e) =>
+              setReviewFilter(e.target.value as "all" | "pending" | "approved" | "rejected" | "archived")
+            }
+            style={{ width: 160 }}
+            title={t("inbox.reviewFilter")}
+          >
+            <option value="pending">
+              {t("inbox.reviewPending")} ({reviewCounts.pending})
+            </option>
+            <option value="approved">
+              {t("inbox.reviewApproved")} ({reviewCounts.approved})
+            </option>
+            <option value="rejected">
+              {t("inbox.reviewRejected")} ({reviewCounts.rejected})
+            </option>
+            <option value="archived">
+              {t("inbox.reviewArchived")} ({reviewCounts.archived})
+            </option>
+            <option value="all">{t("inbox.reviewAll")}</option>
+          </select>
+          <select
+            className="input"
+            value={kindFilter}
+            onChange={(e) => setKindFilter(e.target.value as "all" | "opportunity" | "news")}
+            style={{ width: 140 }}
+          >
+            <option value="all">{t("inbox.kindAll")}</option>
+            <option value="opportunity">{t("inbox.kindOpportunity")}</option>
+            <option value="news">{t("inbox.kindNews")}</option>
+          </select>
           <label className="inbox-toggle">
             <input
               type="checkbox"
@@ -460,7 +561,7 @@ export function Inbox() {
                         className={`btn btn-sm ${r.feedback === "useful" ? "btn-primary" : ""}`}
                         onClick={() => handleFeedback(r.id, "useful")}
                       >
-                        {t("inbox.useful")}
+                        {t("inbox.approve")}
                       </button>
                       <button
                         type="button"
@@ -469,7 +570,14 @@ export function Inbox() {
                         }`}
                         onClick={() => handleFeedback(r.id, "not_useful")}
                       >
-                        {t("inbox.notUseful")}
+                        {t("inbox.reject")}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline"
+                        onClick={() => handleFeedback(r.id, "archived")}
+                      >
+                        {t("inbox.archive")}
                       </button>
                       <button
                         type="button"

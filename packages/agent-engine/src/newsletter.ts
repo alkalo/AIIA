@@ -6,10 +6,13 @@ function str(v: unknown): string {
 }
 
 function looksLikeGrant(item: ExtractedItem): boolean {
+  const kind = str(item.item_kind || item.itemKind).toLowerCase();
+  if (kind === "news") return false;
+  if (kind === "opportunity") return true;
   if (str(item.program_name) || str(item.max_funding) || str(item.deadline)) return true;
   if (str(item.organization) && str(item.description)) return true;
   const blob = `${item.title ?? ""} ${item.summary ?? ""} ${item.description ?? ""} ${item.reason ?? ""}`.toLowerCase();
-  return /\b(grant|funding|subvenci|convocatoria|up to \$|up to €|deadline|closing)\b/i.test(blob);
+  return /\b(grant|funding|subvenci|convocatoria|up to \$|up to €|deadline|closing|fellowship|accelerator|award)\b/i.test(blob);
 }
 
 /** Drop news older than maxAgeDays when a parseable date exists (grants keep). */

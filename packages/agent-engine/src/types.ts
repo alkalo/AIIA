@@ -21,11 +21,18 @@ export interface PromptAttachment {
 export type OpportunitySubtype =
   | "jobs"
   | "grants"
+  | "programs"
+  | "awards"
+  | "exposure"
+  | "sector_news"
   | "tenders"
   | "events"
   | "deals"
   | "real_estate"
   | "custom";
+
+/** High-level content mode for curation agents (optional; inferred when omitted). */
+export type ContentMode = "auto" | "opportunities" | "sector_news" | "wrap";
 
 export interface AgentSpec {
   id: string;
@@ -34,6 +41,8 @@ export interface AgentSpec {
   prompt: string;
   templateId?: TemplateId;
   opportunitySubtype?: OpportunitySubtype;
+  /** Prefer opportunities curation, sector news, or BFGN-style wrap. */
+  contentMode?: ContentMode;
   contextAttachments?: PromptAttachment[];
   search: SearchConfig;
   filters: FilterConfig;
@@ -68,6 +77,12 @@ export interface FilterConfig {
   criteria: string;
   minScore: number;
   dedupe?: { enabled: boolean; fields: string[] };
+  /** Drop news older than N days (sector news / wrap). Default ~35 when applicable. */
+  maxAgeDays?: number;
+  /** Opportunities must have at least this many days until deadline (default 7). */
+  minDaysRemaining?: number;
+  /** Prefer stricter verification (official URL, clear dates, no invented facts). */
+  requireVerification?: boolean;
 }
 
 export interface OutputConfig {
@@ -82,7 +97,13 @@ export interface OutputConfig {
 
 export interface ScheduleConfig {
   intervalMinutes: number;
+  /** If true, local scheduler only fires while the desktop app is open. */
   onlyWhenRunning: boolean;
+  /**
+   * If true (Gemini only), runs are executed by AIIA Cloud when due —
+   * PC does not need to be on. Results sync when the app opens.
+   */
+  cloudEnabled?: boolean;
   timezone?: string;
 }
 

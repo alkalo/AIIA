@@ -1,3 +1,14 @@
+# AIIA on Render
+# - Landing: static site (free)
+# - Cloud cron: free web service (Gemini agents with PC off)
+#
+# Deploy: Render Dashboard → New → Blueprint → this repo
+# Then copy AIIA_CLOUD_TOKEN from the aiia-cloud env vars into AIIA → Settings.
+#
+# Free limits: spins down after 15 min idle (no persistent disk).
+# Keep awake: ping GET /health every ~10 min (cron-job.org / UptimeRobot).
+# After redeploy/restart: Push agents again from Dashboard.
+
 services:
   - type: web
     name: aiia-landing
@@ -5,3 +16,25 @@ services:
     staticPublishPath: ./landing
     buildCommand: echo "Static landing — no build"
     autoDeploy: true
+
+  - type: web
+    name: aiia-cloud
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: .
+    buildCommand: node scripts/render-cloud-build.mjs
+    startCommand: node services/cloud-scheduler/src/index.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: AIIA_CLOUD_TOKEN
+        generateValue: true
+      - key: AIIA_CLOUD_DATA_DIR
+        value: /opt/render/project/src/cloud-data
+      - key: AIIA_RUNNER_JS
+        value: packages/agent-runner/dist/index.js
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"

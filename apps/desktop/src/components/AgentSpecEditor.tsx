@@ -58,6 +58,10 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
   const OPPORTUNITY_SUBTYPES: OpportunitySubtype[] = [
     "jobs",
     "grants",
+    "programs",
+    "awards",
+    "exposure",
+    "sector_news",
     "tenders",
     "events",
     "deals",
@@ -211,6 +215,32 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
             </>
           ) : (
             <p className="spec-value">{safe.maxSources ?? t("spec.maxSourcesDefault", "Modo de ejecución")}</p>
+          )}
+        </div>
+        <div className="spec-field">
+          <label>{t("spec.maxResultsPerQuery")}</label>
+          {editable ? (
+            <>
+              <input
+                type="number"
+                className="input input-narrow"
+                min={1}
+                max={50}
+                placeholder={t("spec.maxResultsPerQueryPlaceholder")}
+                value={safe.maxResultsPerQuery ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  updateSearch({
+                    maxResultsPerQuery: raw === "" ? undefined : Math.max(1, Number(raw) || 1),
+                  });
+                }}
+              />
+              <p className="spec-hint">{t("spec.maxResultsPerQueryHint")}</p>
+            </>
+          ) : (
+            <p className="spec-value">
+              {safe.maxResultsPerQuery ?? t("spec.maxSourcesDefault", "Modo de ejecución")}
+            </p>
           )}
         </div>
         <div className="spec-field">
@@ -424,8 +454,30 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
         <div className="spec-field spec-field-inline">
           <label>{t("spec.onlyWhenRunning")}</label>
           <p className="spec-value">
-            {safeSchedule.onlyWhenRunning ? t("spec.yes") : t("spec.no")}
+            {safeSchedule.cloudEnabled
+              ? t("spec.no")
+              : safeSchedule.onlyWhenRunning
+                ? t("spec.yes")
+                : t("spec.no")}
           </p>
+        </div>
+        <div className="spec-field spec-field-inline">
+          <label>{t("spec.cloudEnabled")}</label>
+          {editable ? (
+            <input
+              type="checkbox"
+              checked={Boolean(safeSchedule.cloudEnabled)}
+              onChange={(e) =>
+                updateSchedule({
+                  cloudEnabled: e.target.checked,
+                  onlyWhenRunning: e.target.checked ? false : true,
+                })
+              }
+            />
+          ) : (
+            <p className="spec-value">{safeSchedule.cloudEnabled ? t("spec.yes") : t("spec.no")}</p>
+          )}
+          <p className="hint-text">{t("spec.cloudHint")}</p>
         </div>
         <div className="spec-field spec-field-inline">
           <label>{t("spec.retention")}</label>
@@ -493,6 +545,9 @@ export function formatSpecValue(key: string, value: unknown, t: TFunction): stri
     const parts = [
       `${t("spec.queries")}: ${s.queries?.join("; ") ?? "—"}`,
       s.maxSources != null ? `${t("spec.maxSources")}: ${s.maxSources}` : "",
+      s.maxResultsPerQuery != null
+        ? `${t("spec.maxResultsPerQuery")}: ${s.maxResultsPerQuery}`
+        : "",
       s.sources?.some((x) => x.type === "duckduckgo") ? "DuckDuckGo" : "",
     ].filter(Boolean);
     return parts.join(" · ");

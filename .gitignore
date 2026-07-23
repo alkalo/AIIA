@@ -9,5 +9,6 @@ apps/desktop/dist/
 apps/desktop/src-tauri/runner-bundle/
 apps/desktop/src-tauri/update-helper/
 packages/*/dist/
+cloud-data/
 _bmad-output/
 *.log

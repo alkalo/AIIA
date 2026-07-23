@@ -96,14 +96,14 @@ export function OpportunityCard({
           className={`btn btn-sm ${result.feedback === "useful" ? "btn-primary" : ""}`}
           onClick={() => onFeedback("useful")}
         >
-          {t("inbox.useful")}
+          {t("inbox.approve")}
         </button>
         <button
           type="button"
           className={`btn btn-sm btn-outline ${result.feedback === "not_useful" ? "btn-danger" : ""}`}
           onClick={() => onFeedback("not_useful")}
         >
-          {t("inbox.notUseful")}
+          {t("inbox.reject")}
         </button>
         <button
           type="button"

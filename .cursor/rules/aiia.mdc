@@ -19,17 +19,19 @@ alwaysApply: true
 - `packages/agent-engine` — Planner, Executor, effort levels, AgentSpec
 - `packages/scraper` — DuckDuckGo + Playwright
 - `packages/agent-runner` — CLI Node para ejecución de agentes
+- `services/cloud-scheduler` — Worker opcional: cron Gemini con PC apagado
 - `landing/` — Sitio estático para Render
 
 ## Convenciones
 - AgentSpec es el contrato central (`docs/agent-spec-schema.md`)
 - AIIA Chat: streaming, historial, visión/export/python local, tools web, bridge agentes (`docs/epics/e7-aiia-chat.md`, `e8-local-parity.md`)
 - Provider unificado `local` | `gemini` (setting `ai_provider`); key Gemini cifrada con DPAPI
+- Cron cloud opcional solo Gemini (`schedule.cloudEnabled`) — Blueprint Render free en `render.yaml`; ver `docs/architecture-cloud-cron.md` / epic E10
 - Sin plugins / GPT store; gen. imágenes solo local (A1111/Forge)
 - Revisión humana obligatoria antes de publicar agente
 - i18n EN/ES con i18next
 - Documentar cambios en `docs/`
-- No añadir servicios cloud para **datos** del usuario; Gemini solo como LLM opcional con key del usuario
+- No añadir servicios cloud para **chats/DB** del usuario; Gemini LLM + cron cloud de ejecución son opcionales con key del usuario
 
 ## BMAD
 - Usar artefactos en `docs/` (prd, architecture, epics) como fuente de verdad

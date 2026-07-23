@@ -1,6 +1,6 @@
 {
   "name": "aiia",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "private": true,
   "description": "AIIA - Local AI chat and search agents",
   "workspaces": [
@@ -17,7 +17,9 @@
     "smoke:chat": "node scripts/smoke-chat.mjs",
     "smoke:gemini-client": "node scripts/smoke-gemini-client.mjs",
     "lint": "npm run build:packages",
-    "playwright:install": "npm exec playwright install chromium --prefix packages/scraper"
+    "playwright:install": "npm exec playwright install chromium --prefix packages/scraper",
+    "cloud:build": "node scripts/render-cloud-build.mjs",
+    "cloud:start": "node services/cloud-scheduler/src/index.js"
   },
   "engines": {
     "node": ">=20"

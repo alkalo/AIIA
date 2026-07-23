@@ -21,6 +21,9 @@ mod ollama;
 mod updater;
 mod chat;
 mod gemini;
+mod cloud;
+
+use cloud::{get_cloud_status, pull_cloud_runs, push_agent_to_cloud, set_cloud_config};
 
 pub struct AppState {
     pub db: Arc<Database>,
@@ -267,12 +270,12 @@ async fn ollama_chat_stream(
     .await
 }
 
-fn read_ai_provider(db: &Database) -> gemini::AiProvider {
+pub(crate) fn read_ai_provider(db: &Database) -> gemini::AiProvider {
     let raw = db.get_setting(gemini::AI_PROVIDER_SETTING).ok().flatten();
     gemini::AiProvider::parse(raw.as_deref())
 }
 
-fn read_gemini_api_key(db: &Database) -> Result<Option<String>, String> {
+pub(crate) fn read_gemini_api_key(db: &Database) -> Result<Option<String>, String> {
     let Some(record) = db
         .get_credential_by_site_id(gemini::GEMINI_SITE_ID)
         .map_err(|e| e.to_string())?
@@ -872,7 +875,7 @@ pub struct AgentVersionDto {
     pub created_at: String,
 }
 
-fn sync_run_results_from_disk(
+pub(crate) fn sync_run_results_from_disk(
     db: &Arc<Database>,
     data_dir: &PathBuf,
     agent_id: Option<&str>,
@@ -2961,11 +2964,25 @@ pub fn run() {
     let credential_runner_path = bundle.credential_runner_path;
     let runner_spawn = bundle.spawn_config;
     let db_for_startup = db.clone();
+    let data_dir_for_sched = data_dir_path.clone();
+    let runner_path_for_sched = runner_path.clone();
+    let runner_spawn_for_sched = runner_spawn.clone();
+    let run_queue_for_sched = Arc::new(Mutex::new(RunQueue::default()));
+    let run_queue = run_queue_for_sched.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(AppState {
+            db: db.clone(),
+            data_dir: data_dir_path,
+            runner_path,
+            credential_runner_path,
+            runner_spawn,
+            run_queue,
+            cancelled_chat_streams: Arc::new(Mutex::new(HashSet::new())),
+        })
         .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -2974,20 +2991,108 @@ pub fn run() {
 
             let app_handle = app.handle().clone();
             let db = db_for_startup.clone();
-            updater::startup_update_check(app_handle, move |key| {
+            updater::startup_update_check(app_handle.clone(), move |key| {
                 db.get_setting(key).ok().flatten()
             });
 
+            // Local cron: every minute, run due agents that are NOT cloud-enabled.
+            let sched_app = app.handle().clone();
+            let sched_db = db_for_startup.clone();
+            let sched_db_for_sched = db_for_startup.clone();
+            let sched_data = data_dir_for_sched.clone();
+            let sched_runner = runner_path_for_sched.clone();
+            let sched_runner_for_new = runner_path_for_sched.clone();
+            let sched_spawn = runner_spawn_for_sched.clone();
+            let sched_queue = run_queue_for_sched.clone();
+            tauri::async_runtime::spawn(async move {
+                let on_run: aiia_core::scheduler::RunCallback = Arc::new(move |agent_id: String| {
+                    let Ok(record) = sched_db.get_agent(&agent_id) else {
+                        return;
+                    };
+                    let effort = effort_to_string(&record.spec.effort);
+                    let _ = ensure_agent_file(&sched_data, &record.spec);
+                    let run_id = Uuid::new_v4().to_string();
+                    let start_now = {
+                        let Ok(mut queue) = sched_queue.lock() else {
+                            return;
+                        };
+                        if queue.active_agent_id.is_none() {
+                            queue.active_agent_id = Some(agent_id.clone());
+                            queue.active_run_id = Some(run_id.clone());
+                            queue.active_effort = Some(effort.clone());
+                            queue.active_started_at = Some(chrono::Utc::now().to_rfc3339());
+                            true
+                        } else {
+                            queue.pending.push_back(QueuedRun {
+                                agent_id: agent_id.clone(),
+                                effort: effort.clone(),
+                                run_id: run_id.clone(),
+                            });
+                            false
+                        }
+                    };
+                    let _ = sched_db.save_run_log(&RunLog {
+                        id: run_id.clone(),
+                        agent_id: agent_id.clone(),
+                        effort: parse_effort_level(&effort),
+                        phase: if start_now {
+                            "starting".to_string()
+                        } else {
+                            "queued".to_string()
+                        },
+                        status: if start_now {
+                            "running".to_string()
+                        } else {
+                            "queued".to_string()
+                        },
+                        summary: "Scheduled local run".to_string(),
+                        results_count: 0,
+                        started_at: chrono::Utc::now(),
+                        finished_at: None,
+                    });
+                    if start_now {
+                        write_progress_snapshot(
+                            &sched_data,
+                            &agent_id,
+                            &run_id,
+                            "starting",
+                            0,
+                            "Ejecución programada…",
+                        );
+                        spawn_agent_run_worker(
+                            sched_app.clone(),
+                            sched_db.clone(),
+                            sched_data.clone(),
+                            sched_runner.clone(),
+                            sched_spawn.clone(),
+                            sched_queue.clone(),
+                            agent_id,
+                            effort,
+                            run_id,
+                        );
+                    }
+                });
+                match aiia_core::scheduler::AgentScheduler::new(
+                    sched_db_for_sched,
+                    on_run,
+                    sched_runner_for_new,
+                )
+                .await
+                {
+                    Ok(scheduler) => {
+                        if let Err(e) = scheduler.start().await {
+                            eprintln!("scheduler start: {e}");
+                            return;
+                        }
+                        if let Err(e) = scheduler.schedule_check().await {
+                            eprintln!("scheduler check: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("scheduler init: {e}"),
+                }
+            });
+
             Ok(())
-        })
-        .manage(AppState {
-            db,
-            data_dir: data_dir_path,
-            runner_path,
-            credential_runner_path,
-            runner_spawn,
-            run_queue: Arc::new(Mutex::new(RunQueue::default())),
-            cancelled_chat_streams: Arc::new(Mutex::new(HashSet::new())),
         })
         .invoke_handler(tauri::generate_handler![
             get_hardware_info,
@@ -3057,6 +3162,10 @@ pub fn run() {
             open_path,
             open_url,
             get_latest_newsletter,
+            get_cloud_status,
+            set_cloud_config,
+            push_agent_to_cloud,
+            pull_cloud_runs,
             sync_latest_run_results,
             list_runs,
             cancel_run,
