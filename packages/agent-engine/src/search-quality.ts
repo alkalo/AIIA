@@ -9,7 +9,11 @@ export interface SearchHit {
 }
 
 /** minScore efectivo según esfuerzo — evita 0 resultados en modo bajo */
-export function effectiveMinScore(effort: EffortLevel, specMinScore: number): number {
+export function effectiveMinScore(
+  effort: EffortLevel,
+  specMinScore: number,
+  opts?: { exhaustive?: boolean }
+): number {
   // Techo de umbral por modo: mantenerlo moderado para no descartar resultados
   // relevantes (el usuario prefiere más cobertura y ordenar por score).
   const caps: Record<EffortLevel, number> = {
@@ -19,7 +23,12 @@ export function effectiveMinScore(effort: EffortLevel, specMinScore: number): nu
     super_high: 55,
     ultra_high: 48,
   };
-  return Math.min(specMinScore, caps[effort] ?? specMinScore);
+  let score = Math.min(specMinScore, caps[effort] ?? specMinScore);
+  // Exhaustive global opportunity runs: prefer coverage; Inbox reviews noise.
+  if (opts?.exhaustive) {
+    score = Math.max(36, score - 10);
+  }
+  return score;
 }
 
 const QUALITY_DOMAIN_PATTERNS = [

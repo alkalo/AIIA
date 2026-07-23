@@ -48,15 +48,16 @@ export function gapFetchBoost(gapCount: number, phase: BudgetPhase): number {
  */
 export function expandCapForExhaustive(
   maxSources: number,
-  opts: { exhaustive?: boolean; gapCount?: number } = {}
+  opts: { exhaustive?: boolean; gapCount?: number; historyExtra?: number } = {}
 ): number {
   const base = Math.min(80, Math.max(24, Math.floor(maxSources / 3)));
   const exhaustive = Boolean(opts.exhaustive);
   const gaps = Math.max(0, opts.gapCount ?? 0);
-  if (!exhaustive && gaps === 0) return base;
+  const historyExtra = Math.max(0, opts.historyExtra ?? 0);
+  if (!exhaustive && gaps === 0 && historyExtra === 0) return base;
   const extra = exhaustive ? 24 : 0;
   const gapExtra = Math.min(30, gaps * 6);
-  return Math.min(120, base + extra + gapExtra);
+  return Math.min(140, base + extra + gapExtra + historyExtra);
 }
 
 export function extractLimitForBudget(

@@ -2944,6 +2944,20 @@ fn get_latest_newsletter(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AdaptiveLearningDto {
+    soft_exhaustive: Option<bool>,
+    feed_extra: Option<i64>,
+    rss_share_pct: Option<i64>,
+    origin_pinned: Option<i64>,
+    origin_pin_detail: Option<String>,
+    expand_extra: Option<i64>,
+    depth2_extra: Option<i64>,
+    pagination_detail: Option<String>,
+    gap_fill_extra: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RunReportDto {
     path: String,
     agent_id: String,
@@ -2962,6 +2976,7 @@ struct RunReportDto {
     feed_skipped_count: Option<i64>,
     feed_fail_count: Option<i64>,
     origin_counts: Option<std::collections::HashMap<String, i64>>,
+    adaptive: Option<AdaptiveLearningDto>,
     updated_at_ms: u64,
 }
 
@@ -3058,6 +3073,25 @@ fn parse_run_report_file(path: &PathBuf, agent_id: &str) -> Result<Option<RunRep
                     .iter()
                     .filter_map(|(k, val)| val.as_i64().map(|n| (k.clone(), n)))
                     .collect()
+            })
+        }),
+        adaptive: v.get("adaptive").and_then(|x| {
+            x.as_object().map(|obj| AdaptiveLearningDto {
+                soft_exhaustive: obj.get("softExhaustive").and_then(|y| y.as_bool()),
+                feed_extra: obj.get("feedExtra").and_then(|y| y.as_i64()),
+                rss_share_pct: obj.get("rssSharePct").and_then(|y| y.as_i64()),
+                origin_pinned: obj.get("originPinned").and_then(|y| y.as_i64()),
+                origin_pin_detail: obj
+                    .get("originPinDetail")
+                    .and_then(|y| y.as_str())
+                    .map(|s| s.to_string()),
+                expand_extra: obj.get("expandExtra").and_then(|y| y.as_i64()),
+                depth2_extra: obj.get("depth2Extra").and_then(|y| y.as_i64()),
+                pagination_detail: obj
+                    .get("paginationDetail")
+                    .and_then(|y| y.as_str())
+                    .map(|s| s.to_string()),
+                gap_fill_extra: obj.get("gapFillExtra").and_then(|y| y.as_i64()),
             })
         }),
         updated_at_ms,

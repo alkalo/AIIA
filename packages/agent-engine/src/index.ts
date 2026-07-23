@@ -1,3 +1,5 @@
+export * from "./approved-boost.js";
+export * from "./origin-preference.js";
 export * from "./discovery-origin.js";
 export * from "./feed-health.js";
 export * from "./portal-detail.js";

@@ -395,6 +395,221 @@ export function extractIsdbDetail(html: string): PortalDetailFields {
   return out;
 }
 
+/** Canada.ca / Community Foundations / IDRC detail */
+export function extractCanadaDetail(html: string): PortalDetailFields {
+  const out: PortalDetailFields = { parser: "canada-grants", scope: "Canada" };
+  const title = firstHeading(html);
+  if (title && !/^canada\.ca|^government of canada|^home$/i.test(title)) {
+    out.title = title;
+    out.program_name = title;
+  }
+  const org = labelValue(
+    html,
+    /Organisation|Organization|Department|From|Published\s*by|Funder|Funded\s*by|Issued\s*by/
+  );
+  if (org) out.organization = org.slice(0, 120);
+  else if (/idrc-crdi/i.test(html)) out.organization = "IDRC";
+  else if (/communityfoundations/i.test(html)) out.organization = "Community Foundations of Canada";
+  else out.organization = "Government of Canada";
+
+  const close = labelValue(
+    html,
+    /Closing\s*date|Deadline|Application\s*deadline|Closes|Close\s*date|Open\s*until|Date\s*de\s*cl[oô]ture/
+  );
+  if (close) out.deadline = normalizeDeadline(close);
+
+  const funding = labelValue(
+    html,
+    /Funding|Grant\s*size|Award|Value|Amount|Maximum|Financement|Montant/
+  );
+  if (funding) out.max_funding = funding.slice(0, 80);
+
+  const desc = metaContent(html, ["og:description", "description"]);
+  if (desc) out.description = desc.slice(0, 400);
+  return out;
+}
+
+/** NZ Community Matters / govt.nz funding detail */
+export function extractNzDetail(html: string): PortalDetailFields {
+  const out: PortalDetailFields = { parser: "nz-grants", scope: "New Zealand" };
+  const title = firstHeading(html);
+  if (title && !/^community matters|^new zealand government|^home$/i.test(title)) {
+    out.title = title;
+    out.program_name = title;
+  }
+  const org = labelValue(
+    html,
+    /Organisation|Organization|From|Published\s*by|Funder|Funded\s*by|Department|Agency/
+  );
+  if (org) out.organization = org.slice(0, 120);
+  else if (/communitymatters/i.test(html)) out.organization = "Community Matters";
+  else out.organization = "New Zealand Government";
+
+  const close = labelValue(
+    html,
+    /Closing\s*date|Deadline|Application\s*deadline|Closes|Close\s*date|Open\s*until|Applications\s*close/
+  );
+  if (close) out.deadline = normalizeDeadline(close);
+
+  const funding = labelValue(html, /Funding|Grant\s*size|Award|Value|Amount|Maximum/);
+  if (funding) out.max_funding = funding.slice(0, 80);
+
+  const desc = metaContent(html, ["og:description", "description"]);
+  if (desc) out.description = desc.slice(0, 400);
+  return out;
+}
+
+/** BOE / sede / CDTI convocatoria detail */
+export function extractEsDetail(html: string): PortalDetailFields {
+  const out: PortalDetailFields = { parser: "es-grants", scope: "España" };
+  const title = firstHeading(html);
+  if (title && !/^boe$|^bolet[ií]n oficial|^sede$/i.test(title)) {
+    out.title = title;
+    out.program_name = title;
+  }
+  const org = labelValue(
+    html,
+    /Organismo|Ministerio|Departamento|Entidad|Convocante|Organismo\s*convocante|From|Published\s*by/
+  );
+  if (org) out.organization = org.slice(0, 120);
+  else if (/cdti\.es/i.test(html)) out.organization = "CDTI";
+  else if (/boe\.es/i.test(html)) out.organization = "BOE / Administración General del Estado";
+
+  const close = labelValue(
+    html,
+    /Fecha\s*l[ií]mite|Plazo|Deadline|Closing\s*date|Fin\s*de\s*plazo|Fecha\s*de\s*finalizaci[oó]n|Presentaci[oó]n\s*hasta/
+  );
+  if (close) out.deadline = normalizeDeadline(close);
+
+  const funding = labelValue(
+    html,
+    /Importe|Cuant[ií]a|Presupuesto|Dotaci[oó]n|Funding|Amount|Ayuda\s*m[aá]xima/
+  );
+  if (funding) out.max_funding = funding.slice(0, 80);
+
+  const desc = metaContent(html, ["og:description", "description"]);
+  if (desc) out.description = desc.slice(0, 400);
+  return out;
+}
+
+/** CEPAL / ECLAC project / event / funding detail */
+export function extractCepalDetail(html: string): PortalDetailFields {
+  const out: PortalDetailFields = { parser: "cepal-latam", scope: "LATAM" };
+  const title = firstHeading(html);
+  if (title && !/^cepal$|^eclac$|^economic commission/i.test(title)) {
+    out.title = title;
+    out.program_name = title;
+  }
+  out.organization = "CEPAL / ECLAC";
+  const close = labelValue(
+    html,
+    /Deadline|Closing\s*Date|Fecha\s*l[ií]mite|Publication\s*Date|Fecha\s*de\s*publicaci[oó]n|Due\s*Date/
+  );
+  if (close) out.deadline = normalizeDeadline(close);
+  const funding = labelValue(html, /Amount|Funding|Budget|Monto|Presupuesto|Financing|Financiamiento/);
+  if (funding) out.max_funding = funding.slice(0, 80);
+  const desc = metaContent(html, ["og:description", "description"]);
+  if (desc) out.description = desc.slice(0, 400);
+  const country = labelValue(html, /Country|Countries|Pa[ií]s|Region|Regi[oó]n|Location/);
+  if (country) out.scope = country.slice(0, 60);
+  return out;
+}
+
+/** CAF — Development Bank of Latin America detail */
+export function extractCafDetail(html: string): PortalDetailFields {
+  const out: PortalDetailFields = { parser: "caf-latam", scope: "LATAM" };
+  const title = firstHeading(html);
+  if (title && !/^caf$|^banco de desarrollo/i.test(title)) {
+    out.title = title;
+    out.program_name = title;
+  }
+  out.organization = "CAF — Development Bank of Latin America";
+  const close = labelValue(
+    html,
+    /Deadline|Closing\s*Date|Fecha\s*l[ií]mite|Publication\s*Date|Fecha\s*de\s*publicaci[oó]n|Due\s*Date/
+  );
+  if (close) out.deadline = normalizeDeadline(close);
+  const funding = labelValue(html, /Amount|Funding|Budget|Monto|Presupuesto|Financing|Financiamiento|Loan/);
+  if (funding) out.max_funding = funding.slice(0, 80);
+  const desc = metaContent(html, ["og:description", "description"]);
+  if (desc) out.description = desc.slice(0, 400);
+  const country = labelValue(html, /Country|Countries|Pa[ií]s|Region|Regi[oó]n|Location/);
+  if (country) out.scope = country.slice(0, 60);
+  return out;
+}
+
+/** UNECA project / event / news detail */
+export function extractUnecaDetail(html: string): PortalDetailFields {
+  const out: PortalDetailFields = { parser: "uneca-africa", scope: "Africa" };
+  const title = firstHeading(html);
+  if (title && !/^uneca$|^economic commission for africa|^eca$/i.test(title)) {
+    out.title = title;
+    out.program_name = title;
+  }
+  out.organization = "UNECA — UN Economic Commission for Africa";
+  const close = labelValue(
+    html,
+    /Deadline|Closing\s*Date|Publication\s*Date|Due\s*Date|Event\s*Date|Date/
+  );
+  if (close) out.deadline = normalizeDeadline(close);
+  const funding = labelValue(html, /Amount|Funding|Budget|Financing|Grant/);
+  if (funding) out.max_funding = funding.slice(0, 80);
+  const desc = metaContent(html, ["og:description", "description"]);
+  if (desc) out.description = desc.slice(0, 400);
+  const country = labelValue(html, /Country|Countries|Region|Location|Member\s*State/);
+  if (country) out.scope = country.slice(0, 60);
+  return out;
+}
+
+/** UNESCWA project / event / funding detail */
+export function extractUnescwaDetail(html: string): PortalDetailFields {
+  const out: PortalDetailFields = { parser: "unescwa-mena", scope: "MENA" };
+  const title = firstHeading(html);
+  if (title && !/^unescwa$|^escwa$|^economic and social commission/i.test(title)) {
+    out.title = title;
+    out.program_name = title;
+  }
+  out.organization = "UNESCWA — UN Economic and Social Commission for Western Asia";
+  const close = labelValue(
+    html,
+    /Deadline|Closing\s*Date|Publication\s*Date|Due\s*Date|Event\s*Date|Date/
+  );
+  if (close) out.deadline = normalizeDeadline(close);
+  const funding = labelValue(html, /Amount|Funding|Budget|Financing|Grant/);
+  if (funding) out.max_funding = funding.slice(0, 80);
+  const desc = metaContent(html, ["og:description", "description"]);
+  if (desc) out.description = desc.slice(0, 400);
+  const country = labelValue(html, /Country|Countries|Region|Location|Member\s*State/);
+  if (country) out.scope = country.slice(0, 60);
+  return out;
+}
+
+/** EBRD procurement / project / news detail */
+export function extractEbrdDetail(html: string): PortalDetailFields {
+  const out: PortalDetailFields = { parser: "ebrd-mena", scope: "MENA/Europe" };
+  const title = firstHeading(html);
+  if (title && !/^ebrd$|^european bank for reconstruction/i.test(title)) {
+    out.title = title;
+    out.program_name = title;
+  }
+  out.organization = "European Bank for Reconstruction and Development";
+  const close = labelValue(
+    html,
+    /Deadline|Closing\s*Date|Submission\s*Deadline|Publication\s*Date|Due\s*Date|Issue\s*Date|Closing/
+  );
+  if (close) out.deadline = normalizeDeadline(close);
+  const funding = labelValue(
+    html,
+    /Amount|Funding|Budget|Contract\s*Value|Estimated\s*Value|Project\s*Value|Financing/
+  );
+  if (funding) out.max_funding = funding.slice(0, 80);
+  const desc = metaContent(html, ["og:description", "description"]);
+  if (desc) out.description = desc.slice(0, 400);
+  const country = labelValue(html, /Country|Countries|Region|Location|Client|Borrower/);
+  if (country) out.scope = country.slice(0, 60);
+  return out;
+}
+
 /** Compact hints injected into the LLM extract prompt (pre-fill). */
 export function formatPortalDetailHints(portal: PortalDetailFields | null | undefined): string {
   if (!portalDetailHasSignal(portal) || !portal) return "";
@@ -428,10 +643,18 @@ export function extractPortalDetails(html: string, pageUrl: string): PortalDetai
   if (parserId === "worldbank-global") return extractWorldBankDetail(html);
   if (parserId === "undp-global") return extractUndpDetail(html);
   if (parserId === "isdb-mena") return extractIsdbDetail(html);
+  if (parserId === "canada-grants") return extractCanadaDetail(html);
+  if (parserId === "nz-grants") return extractNzDetail(html);
+  if (parserId === "es-grants") return extractEsDetail(html);
+  if (parserId === "cepal-latam") return extractCepalDetail(html);
+  if (parserId === "caf-latam") return extractCafDetail(html);
+  if (parserId === "uneca-africa") return extractUnecaDetail(html);
+  if (parserId === "unescwa-mena") return extractUnescwaDetail(html);
+  if (parserId === "ebrd-mena") return extractEbrdDetail(html);
 
   // Detail-ish URLs on known hosts
   if (
-    /\/go\/show|search-results-detail|topic-details|opportunity-details|view-opportunity|\/projects\/|\/news\/|\/grants\/|\/funding\/|\/projects-and-operations\/|\/projects-operations\/|\/opportunities|\/procurement|\/calls-for/i.test(
+    /\/go\/show|search-results-detail|topic-details|opportunity-details|view-opportunity|\/projects\/|\/proyectos\/|\/news\/|\/noticias\/|\/stories\/|\/events?\/|\/grants\/|\/funding\/|\/financiamient|\/projects-and-operations\/|\/projects-operations\/|\/opportunities|\/procurement|\/notices?\/|\/calls-for|\/diario_boe\/|txt\.php\?id=BOE|\/ayudas\/|\/convocatorias|\/currently\/|\/actualidad\/|\/publications?\/|\/work-with-us\//i.test(
       pageUrl
     )
   ) {
@@ -448,6 +671,16 @@ export function extractPortalDetails(html: string, pageUrl: string): PortalDetai
     if (/isdb\.org/i.test(pageUrl)) return extractIsdbDetail(html);
     if (/fundsforngos\.org|candid\.org/i.test(pageUrl)) return extractFundsForNgosDetail(html);
     if (/\.gov\.uk|tnlcommunityfund/i.test(pageUrl)) return extractGovUkDetail(html);
+    if (/canada\.ca|communityfoundations\.ca|idrc-crdi\.ca/i.test(pageUrl)) {
+      return extractCanadaDetail(html);
+    }
+    if (/govt\.nz|communitymatters/i.test(pageUrl)) return extractNzDetail(html);
+    if (/boe\.es|administracion\.gob\.es|cdti\.es/i.test(pageUrl)) return extractEsDetail(html);
+    if (/cepal\.org|eclac\.org/i.test(pageUrl)) return extractCepalDetail(html);
+    if (/caf\.com/i.test(pageUrl)) return extractCafDetail(html);
+    if (/uneca\.org/i.test(pageUrl)) return extractUnecaDetail(html);
+    if (/unescwa\.org/i.test(pageUrl)) return extractUnescwaDetail(html);
+    if (/ebrd\.com/i.test(pageUrl)) return extractEbrdDetail(html);
   }
 
   if (

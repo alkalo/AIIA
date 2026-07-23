@@ -41,6 +41,18 @@ export interface ExportRunMeta {
   feedFailCount?: number;
   /** Finals by discovery channel (rss / portal-seed / serp / …). */
   originCounts?: Record<string, number>;
+  /** Adaptive learning applied this run. */
+  adaptive?: {
+    softExhaustive?: boolean;
+    feedExtra?: number;
+    rssSharePct?: number;
+    originPinned?: number;
+    originPinDetail?: string;
+    expandExtra?: number;
+    depth2Extra?: number;
+    paginationDetail?: string;
+    gapFillExtra?: number;
+  };
 }
 
 export async function exportResults(
@@ -123,6 +135,7 @@ export async function exportResults(
           feedSkippedCount: meta?.feedSkippedCount,
           feedFailCount: meta?.feedFailCount,
           originCounts: meta?.originCounts,
+          adaptive: meta?.adaptive,
         },
         null,
         2

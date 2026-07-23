@@ -24,6 +24,18 @@ export interface SourceHealthInput {
   feedCooldownLines?: string[];
   /** Finals counted by discovery channel (rss, portal-seed, serp…). */
   originCounts?: Record<string, number>;
+  /** Adaptive learning applied this run (from health-history). */
+  adaptive?: {
+    softExhaustive?: boolean;
+    feedExtra?: number;
+    rssSharePct?: number;
+    originPinned?: number;
+    originPinDetail?: string;
+    expandExtra?: number;
+    depth2Extra?: number;
+    paginationDetail?: string;
+    gapFillExtra?: number;
+  };
 }
 
 export function formatSourceHealthReport(h: SourceHealthInput): string {
@@ -33,6 +45,34 @@ export function formatSourceHealthReport(h: SourceHealthInput): string {
     .map(([e, n]) => `${formatEngineId(e)}:${n}`)
     .join(", ");
   const originLine = formatOriginSummary(h.originCounts);
+  const adaptiveParts: string[] = [];
+  if (h.adaptive?.softExhaustive) adaptiveParts.push("curación suave");
+  if (h.adaptive?.feedExtra && h.adaptive.feedExtra > 0) {
+    adaptiveParts.push(
+      `RSS +${h.adaptive.feedExtra} feeds${
+        h.adaptive.rssSharePct != null ? ` (${h.adaptive.rssSharePct}%)` : ""
+      }`
+    );
+  }
+  if (h.adaptive?.originPinned && h.adaptive.originPinned > 0) {
+    adaptiveParts.push(
+      `origin-pin ${h.adaptive.originPinned}${
+        h.adaptive.originPinDetail ? ` [${h.adaptive.originPinDetail}]` : ""
+      }`
+    );
+  }
+  if (h.adaptive?.expandExtra && h.adaptive.expandExtra > 0) {
+    adaptiveParts.push(`expand +${h.adaptive.expandExtra}`);
+  }
+  if (h.adaptive?.depth2Extra && h.adaptive.depth2Extra > 0) {
+    adaptiveParts.push(`depth-2 +${h.adaptive.depth2Extra}`);
+  }
+  if (h.adaptive?.paginationDetail) {
+    adaptiveParts.push(`paginación ${h.adaptive.paginationDetail}`);
+  }
+  if (h.adaptive?.gapFillExtra && h.adaptive.gapFillExtra > 0) {
+    adaptiveParts.push(`gap-fill +${h.adaptive.gapFillExtra}`);
+  }
   const lines = [
     `SERP: ${engines || "0 hits"}${h.serpExhausted ? " (agotado/bloqueado)" : ""}`,
     `Semillas portal: ${h.seedCount} · RSS: ${h.feedItemCount}${
@@ -53,9 +93,56 @@ export function formatSourceHealthReport(h: SourceHealthInput): string {
       ? [`Feeds en cooldown: ${h.feedCooldownLines.join("; ")}`]
       : []),
     ...(originLine ? [originLine] : []),
+    ...(adaptiveParts.length > 0
+      ? [`Aprendizaje adaptativo: ${adaptiveParts.join(" · ")}`]
+      : []),
     `Resultados finales: ${h.finalCount}`,
   ];
   return lines.join("\n");
+}
+
+/** Chips for Inbox/Runs adaptive learning row. */
+export function formatAdaptiveChips(
+  adaptive:
+    | {
+        softExhaustive?: boolean;
+        feedExtra?: number;
+        rssSharePct?: number;
+        originPinned?: number;
+        expandExtra?: number;
+        depth2Extra?: number;
+        paginationDetail?: string;
+        gapFillExtra?: number;
+      }
+    | null
+    | undefined
+): string[] {
+  if (!adaptive) return [];
+  const chips: string[] = [];
+  if (adaptive.softExhaustive) chips.push("soft");
+  if (adaptive.feedExtra && adaptive.feedExtra > 0) {
+    chips.push(
+      adaptive.rssSharePct != null
+        ? `RSS+${adaptive.feedExtra}(${adaptive.rssSharePct}%)`
+        : `RSS+${adaptive.feedExtra}`
+    );
+  }
+  if (adaptive.originPinned && adaptive.originPinned > 0) {
+    chips.push(`pin:${adaptive.originPinned}`);
+  }
+  if (adaptive.expandExtra && adaptive.expandExtra > 0) {
+    chips.push(`expand+${adaptive.expandExtra}`);
+  }
+  if (adaptive.depth2Extra && adaptive.depth2Extra > 0) {
+    chips.push(`depth2+${adaptive.depth2Extra}`);
+  }
+  if (adaptive.paginationDetail) {
+    chips.push(`page:${adaptive.paginationDetail}`);
+  }
+  if (adaptive.gapFillExtra && adaptive.gapFillExtra > 0) {
+    chips.push(`gap+${adaptive.gapFillExtra}`);
+  }
+  return chips;
 }
 
 function formatEngineId(id: string): string {

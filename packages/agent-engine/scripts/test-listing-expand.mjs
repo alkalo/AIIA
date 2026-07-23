@@ -66,6 +66,25 @@ const links = extractOpportunityDeepLinks(html, page, 10);
 assert.ok(links.length >= 3, `expected deep links incl. fetch markup, got ${links.length}`);
 assert.ok(links.every((l) => /GoUuid|Go\/Show/i.test(l.url)));
 
+assert.equal(
+  isExpandableListingPage("https://probonoaustralia.com.au/news/", "<html>" + "x".repeat(2500)),
+  true,
+  "news hub should be expandable"
+);
+const newsHtml = [
+  "<html><body>",
+  '<a href="/news/social-enterprise-wins-grant-2026">Article one</a>',
+  '<a href="/news/impact-investing-update">Article two</a>',
+  '<a href="/about">About</a>',
+  "</body></html>",
+].join("\n");
+const newsLinks = extractOpportunityDeepLinks(
+  newsHtml,
+  "https://probonoaustralia.com.au/news/",
+  10
+);
+assert.ok(newsLinks.length >= 2, `expected news article deep links, got ${newsLinks.length}`);
+
 const richNoDeadline = {
   title: "Community Impact Grant",
   organization: "Example Foundation",

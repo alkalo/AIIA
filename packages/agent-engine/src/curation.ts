@@ -186,6 +186,12 @@ export interface CurationOptions {
   /** Known fingerprints from prior runs (cross-run dedupe). */
   knownFingerprints?: Set<string>;
   now?: Date;
+  /**
+   * Exhaustive global opportunity/news runs: keep borderline undated / low-signal
+   * items for human Inbox review instead of dropping them. For news, also relax
+   * freshness by +7 days.
+   */
+  exhaustiveSoft?: boolean;
 }
 
 function defaultMinDays(spec: AgentSpec): number {
@@ -253,7 +259,9 @@ export function shouldExcludeOpportunity(
   const deadline = item.deadline ?? item.closing_date ?? item.closingDate;
   if (isExpiredDeadline(deadline, now)) return "expired";
   const days = daysUntilDeadline(deadline, now);
-  if (days != null && days < minDays) return "closing_too_soon";
+  // Exhaustive: allow slightly closer deadlines (human can still reject).
+  const effectiveMinDays = opts.exhaustiveSoft ? Math.max(0, minDays - 3) : minDays;
+  if (days != null && days < effectiveMinDays) return "closing_too_soon";
 
   // Undated non-rolling: prefer keeping concrete opportunities for human review
   // (exhaustive mode) over dropping them — Inbox can reject.
@@ -261,6 +269,10 @@ export function shouldExcludeOpportunity(
     /\b(rolling|ongoing|open now|no deadline)\b/i.test(b) ||
     /^rolling$/i.test(str(item.status));
   if (spec.filters?.requireVerification && !deadline && !rolling && !parseDeadline(deadline)) {
+    if (opts.exhaustiveSoft) {
+      // Any titled opportunity URL is reviewable in exhaustive global runs.
+      if (str(item.program_name) || str(item.title)) return null;
+    }
     if (coverage) return null;
     if (isDirectGrantUrl(url)) return null;
     if (hasConcreteFields) return null;
@@ -293,13 +305,108 @@ export function shouldExcludeNews(
   spec: AgentSpec,
   opts: CurationOptions = {}
 ): string | null {
-  const maxAge = opts.maxNewsAgeDays ?? defaultNewsAge(spec);
+  const baseAge = opts.maxNewsAgeDays ?? defaultNewsAge(spec);
+  // Exhaustive soft: keep slightly older stories for human review.
+  const maxAge = opts.exhaustiveSoft ? baseAge + 7 : baseAge;
   if (!isFreshEnough(item, maxAge)) return "stale_news";
   const url = str(item.url);
   if (!url || !/^https?:\/\//i.test(url)) return "missing_url";
   const title = str(item.title || item.headline);
   if (!title || title.length < 8) return "weak_title";
   return null;
+}
+
+/**
+ * Raise multipass/critic scores that wrongly dump concrete opportunities or news near zero.
+ * Exhaustive global runs use softer floors so coverage survives for Inbox review.
+ */
+export function applyCurationScoreFloor(
+  items: ExtractedItem[],
+  spec: AgentSpec,
+  exhaustive = false
+): ExtractedItem[] {
+  const oppMode = isGrantTarget(spec) || isCurationOpportunityTarget(spec);
+  const newsMode =
+    isSectorNewsTarget(spec) && !isGrantTarget(spec) && !isCurationOpportunityTarget(spec);
+  if (!oppMode && !newsMode) return items;
+
+  return items.map((item) => {
+    const url = str(item.url);
+    if (!url || !/^https?:\/\//i.test(url)) return item;
+
+    const coverage = hasCoverageProvenance(
+      item.reason,
+      item.summary,
+      item.description,
+      item.snippet
+    );
+    const score = Number(item.score ?? 0);
+    let floor = 0;
+
+    if (newsMode) {
+      const title = str(item.title || item.headline);
+      if (!title || title.length < 8) return item;
+      const articleish =
+        /\/news\/[a-z0-9]|\/stories\/|\/articles?\/|\/press\//i.test(url) ||
+        pathDepth(url) >= 2;
+      floor = coverage
+        ? exhaustive
+          ? 48
+          : 55
+        : articleish
+          ? exhaustive
+            ? 46
+            : 52
+          : exhaustive
+            ? 42
+            : 48;
+    } else {
+      const program = str(item.program_name ?? item.title);
+      const org = str(item.organization);
+      const rich =
+        Boolean(program) &&
+        Boolean(
+          org ||
+            item.deadline ||
+            item.max_funding ||
+            item.value_or_benefit ||
+            item.eligibility
+        );
+      if (!rich && !coverage) return item;
+      floor = coverage
+        ? exhaustive
+          ? 48
+          : 55
+        : isDirectGrantUrl(url)
+          ? exhaustive
+            ? 50
+            : 58
+          : isLowQualityGrantUrl(url)
+            ? exhaustive
+              ? 38
+              : 42
+            : exhaustive
+              ? 45
+              : 52;
+    }
+
+    if (score >= floor) return item;
+    return {
+      ...item,
+      score: floor,
+      reason: item.reason
+        ? `${item.reason} | score-floor${exhaustive ? ":exhaustive" : ""}`
+        : `score-floor${exhaustive ? ":exhaustive" : ""}`,
+    };
+  });
+}
+
+function pathDepth(url: string): number {
+  try {
+    return new URL(url).pathname.replace(/\/$/, "").split("/").filter(Boolean).length;
+  } catch {
+    return 0;
+  }
 }
 
 /**

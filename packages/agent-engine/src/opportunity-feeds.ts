@@ -237,8 +237,21 @@ const NEWS_FEEDS: OpportunityFeed[] = [
 export function opportunityFeedsForSpec(spec: AgentSpec): OpportunityFeed[] {
   const blob = `${spec.prompt} ${spec.filters.criteria}`;
   if (isSectorNewsTarget(spec) && !isGrantTarget(spec) && !isCurationOpportunityTarget(spec)) {
+    const regions = detectGrantRegions(blob);
+    const exhaustive = regions.has("global") && regions.size === 1;
+    const out: OpportunityFeed[] = [];
+    for (const f of NEWS_FEEDS) {
+      const reg = String(f.region).toLowerCase();
+      if (reg === "global" || reg === "news") {
+        out.push(f);
+        continue;
+      }
+      if (exhaustive || regions.has("global") || regions.has(reg as GrantRegionId)) {
+        out.push(f);
+      }
+    }
     const seen = new Set<string>();
-    return NEWS_FEEDS.filter((f) => {
+    return out.filter((f) => {
       const k = f.url.toLowerCase();
       if (seen.has(k)) return false;
       seen.add(k);

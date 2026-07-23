@@ -19,16 +19,16 @@ const HREF_RE = /href\s*=\s*["']([^"']+)["']/gi;
 const TITLE_HINT_RE =
   /(?:title|aria-label)\s*=\s*["']([^"']{8,160})["']/i;
 
-/** Paths that look like open-call / grant detail pages (AU + global). */
+/** Paths that look like open-call / grant / article detail pages (AU + global). */
 const OPPORTUNITY_PATH_RE =
-  /\/go\/show|gouuid=|grantid=|opportunityid=|foid=|\/viewgrant|\/grant-details|\/funding-opportunity|\/grants?\/[a-z0-9][\w-]{2,}|\/funding\/[a-z0-9]|\/opportunit(?:y|ies)\/|\/program(?:me)?s?\/[a-z0-9]|\/apply\/|\/call-for|\/fellowship|\/award[s]?\/|\/competition\/|\/tender\/|\/rfp\/|\/solicitud|\/convocatoria|\/subvenc|\/ayuda[s]?\/|\/becas?\/|\/search-grants|\/funding\/opportunit|\/how-to-apply|\/open-call/i;
+  /\/go\/show|gouuid=|grantid=|opportunityid=|foid=|\/viewgrant|\/grant-details|\/funding-opportunity|\/grants?\/[a-z0-9][\w-]{2,}|\/funding\/[a-z0-9]|\/opportunit(?:y|ies)\/|\/program(?:me)?s?\/[a-z0-9]|\/apply\/|\/call-for|\/fellowship|\/award[s]?\/|\/competition\/|\/tender\/|\/rfp\/|\/solicitud|\/convocatoria|\/subvenc|\/ayuda[s]?\/|\/becas?\/|\/search-grants|\/funding\/opportunit|\/how-to-apply|\/open-call|\/news\/[a-z0-9][\w-]{2,}|\/stories\/[a-z0-9]|\/press\/[a-z0-9]|\/articles?\/[a-z0-9]/i;
 
 const SKIP_PATH_RE =
   /\/(login|signin|sign-up|register|cart|checkout|privacy|terms|cookie|accessibility|contact|about|news\/?$|blog\/?$|events?\/calendar)(\/|$)/i;
 
 /** Aggregators / gov portals allowed even when linked cross-host from a seed page. */
 const KNOWN_GRANT_HOST_RE =
-  /grants\.gov\.au|communitygrants|business\.gov\.au|frrr\.org|fundsforngos|grantwatch|philanthropy\.org|grantly|globalgiving|gov\.uk|europa\.eu|grants\.gov|canada\.ca|govt\.nz|communitymatters|boe\.es|cdti\.es|enisa\.es|devex\.com|terravivagrants|instrumentl|candid\.org|tnlcommunityfund|cordis\.europa|iadb\.org|adb\.org|ourcommunity\.com\.au|grantmaker/i;
+  /grants\.gov\.au|communitygrants|business\.gov\.au|frrr\.org|fundsforngos|grantwatch|philanthropy\.org|grantly|globalgiving|gov\.uk|europa\.eu|grants\.gov|canada\.ca|govt\.nz|communitymatters|boe\.es|cdti\.es|enisa\.es|devex\.com|terravivagrants|instrumentl|candid\.org|tnlcommunityfund|cordis\.europa|iadb\.org|adb\.org|ourcommunity\.com\.au|grantmaker|probonoaustralia|socialenterprise\.org|ssir\.org|compromisoempresarial|alliancemagazine|philanthropynewsdigest|impactinvesting|communitydirectors/i;
 
 const PAGINATION_HINT_RE =
   /(?:next|siguiente|page\s*\d+|página|›|»|older|más resultados|load more|ver más)/i;
@@ -152,10 +152,10 @@ export function extractOpportunityDeepLinks(
   return out;
 }
 
-/** True when a fetched page is worth expanding into child opportunity links. */
+/** True when a fetched page is worth expanding into child opportunity / article links. */
 export function isExpandableListingPage(url: string, html?: string): boolean {
   if (
-    /\/go\/list|\/grants-and-programs|\/grants?(\/|$)|\/funding(\/|$)|\/search|grantconnect|browse|\/opportunities|\/funding-tenders|\/seek-funding|\/category\/latest|search-grants|search-results|topic-details|find-government-grants/i.test(
+    /\/go\/list|\/grants-and-programs|\/grants?(\/|$)|\/funding(\/|$)|\/search|grantconnect|browse|\/opportunities|\/funding-tenders|\/seek-funding|\/category\/latest|search-grants|search-results|topic-details|find-government-grants|\/news(\/|$)|\/stories(\/|$)|\/press(\/|$)|\/articles?(\/|$)|\/blog(\/|$)/i.test(
       url
     )
   ) {

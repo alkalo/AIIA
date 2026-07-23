@@ -15,7 +15,15 @@ export type PortalParserId =
   | "afdb-africa"
   | "worldbank-global"
   | "undp-global"
-  | "isdb-mena";
+  | "isdb-mena"
+  | "canada-grants"
+  | "nz-grants"
+  | "es-grants"
+  | "cepal-latam"
+  | "caf-latam"
+  | "uneca-africa"
+  | "unescwa-mena"
+  | "ebrd-mena";
 
 export interface PortalDeepLink {
   title: string;
@@ -97,6 +105,41 @@ export function matchPortalParser(pageUrl: string): PortalParserId | null {
     }
     if (/fundsforngos\.org$/i.test(host) || /candid\.org$/i.test(host)) {
       return "fundsforngos";
+    }
+    if (
+      (/canada\.ca$/i.test(host) && /grant|funding|fund|subsid|benefit|financement/i.test(path + pageUrl)) ||
+      /communityfoundations\.ca$/i.test(host) ||
+      /idrc-crdi\.ca$/i.test(host)
+    ) {
+      return "canada-grants";
+    }
+    if (
+      /communitymatters\.govt\.nz$/i.test(host) ||
+      (/govt\.nz$/i.test(host) && /funding|grant|fund|subsid/i.test(path + pageUrl))
+    ) {
+      return "nz-grants";
+    }
+    if (
+      /boe\.es$/i.test(host) ||
+      (/administracion\.gob\.es$/i.test(host) && /ayuda|subvenci|convocatoria|financi/i.test(path + pageUrl)) ||
+      (/cdti\.es$/i.test(host) && /ayuda|convocatoria|financi/i.test(path + pageUrl))
+    ) {
+      return "es-grants";
+    }
+    if (/(^|\.)cepal\.org$/i.test(host) || /(^|\.)eclac\.org$/i.test(host)) {
+      return "cepal-latam";
+    }
+    if (/(^|\.)caf\.com$/i.test(host)) {
+      return "caf-latam";
+    }
+    if (/(^|\.)uneca\.org$/i.test(host)) {
+      return "uneca-africa";
+    }
+    if (/(^|\.)unescwa\.org$/i.test(host)) {
+      return "unescwa-mena";
+    }
+    if (/(^|\.)ebrd\.com$/i.test(host)) {
+      return "ebrd-mena";
     }
   } catch {
     /* keep */
@@ -634,6 +677,325 @@ export function parseIsdb(html: string, pageUrl: string, max = 60): PortalDeepLi
   return out;
 }
 
+/** Canada.ca / Community Foundations / IDRC — funding & grant deep links */
+export function parseCanadaGrants(
+  html: string,
+  pageUrl: string,
+  max = 60
+): PortalDeepLink[] {
+  const seen = new Set<string>();
+  const out: PortalDeepLink[] = [];
+  const hrefRe =
+    /href\s*=\s*["']([^"']*(?:\/funding|\/grants?|\/funds?|\/financement|\/programs?\/|\/opportunities|\/calls?)[^"']*)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/canada\.ca|communityfoundations\.ca|idrc-crdi\.ca/i.test(abs)) continue;
+    try {
+      const path = new URL(abs).pathname.replace(/\/$/, "") || "/";
+      if (path === "/" || path.split("/").filter(Boolean).length < 2) continue;
+      if (/\/(login|search|tag|author|page)(\/|$)/i.test(path)) continue;
+    } catch {
+      continue;
+    }
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "Canadian funding opportunity",
+        url: abs,
+        snippet: "portal-parser:canada-grants",
+        parser: "canada-grants",
+      },
+      max
+    );
+  }
+  return out;
+}
+
+/** NZ Community Matters / govt.nz funding browse */
+export function parseNzGrants(html: string, pageUrl: string, max = 60): PortalDeepLink[] {
+  const seen = new Set<string>();
+  const out: PortalDeepLink[] = [];
+  const hrefRe =
+    /href\s*=\s*["']([^"']*(?:\/funding|\/grants?|\/funds?|\/fund|\/schemes?|\/apply)[^"']*)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/govt\.nz|communitymatters/i.test(abs)) continue;
+    try {
+      const path = new URL(abs).pathname.replace(/\/$/, "") || "/";
+      if (path === "/" || path.split("/").filter(Boolean).length < 2) continue;
+    } catch {
+      continue;
+    }
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "NZ funding opportunity",
+        url: abs,
+        snippet: "portal-parser:nz-grants",
+        parser: "nz-grants",
+      },
+      max
+    );
+  }
+  return out;
+}
+
+/** BOE / sede / CDTI — convocatorias y subvenciones ES */
+export function parseEsGrants(html: string, pageUrl: string, max = 60): PortalDeepLink[] {
+  const seen = new Set<string>();
+  const out: PortalDeepLink[] = [];
+
+  // BOE document / ayuda links
+  const boeRe =
+    /href\s*=\s*["']([^"']*(?:\/diario_boe\/|\/buscar\/(?:doc|ayudas|actos)|txt\.php\?id=BOE)[^"']*)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = boeRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/boe\.es/i.test(abs)) continue;
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "Convocatoria BOE",
+        url: abs,
+        snippet: "portal-parser:es-grants",
+        parser: "es-grants",
+      },
+      max
+    );
+  }
+
+  const hrefRe =
+    /href\s*=\s*["']([^"']*(?:subvenci|convocatoria|ayuda|financiaci[oó]n|\/ayudas\/|\/convocatorias)[^"']*)["']/gi;
+  while ((m = hrefRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/boe\.es|administracion\.gob\.es|cdti\.es/i.test(abs)) continue;
+    try {
+      const path = new URL(abs).pathname.replace(/\/$/, "") || "/";
+      if (path === "/" || path.split("/").filter(Boolean).length < 1) continue;
+    } catch {
+      continue;
+    }
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "Ayuda / convocatoria ES",
+        url: abs,
+        snippet: "portal-parser:es-grants",
+        parser: "es-grants",
+      },
+      max
+    );
+  }
+  return out;
+}
+
+/** CEPAL / ECLAC — projects, events, news, funding deep links */
+export function parseCepalLatam(html: string, pageUrl: string, max = 60): PortalDeepLink[] {
+  const seen = new Set<string>();
+  const out: PortalDeepLink[] = [];
+  const hrefRe =
+    /href\s*=\s*["']([^"']*(?:\/projects?\/|\/proyectos\/|\/events?\/|\/eventos\/|\/news\/|\/noticias\/|\/pressreleases?\/|\/funding\/|\/financiamient|\/calls?\/|\/convocatorias?)[^"']*)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/cepal\.org|eclac\.org/i.test(abs)) continue;
+    try {
+      const path = new URL(abs).pathname.replace(/\/$/, "") || "/";
+      if (path === "/" || path.split("/").filter(Boolean).length < 2) continue;
+    } catch {
+      continue;
+    }
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "CEPAL opportunity",
+        url: abs,
+        snippet: "portal-parser:cepal-latam",
+        parser: "cepal-latam",
+      },
+      max
+    );
+  }
+  return out;
+}
+
+/** CAF — Development Bank of Latin America news / funding / opportunities */
+export function parseCafLatam(html: string, pageUrl: string, max = 60): PortalDeepLink[] {
+  const seen = new Set<string>();
+  const out: PortalDeepLink[] = [];
+  const hrefRe =
+    /href\s*=\s*["']([^"']*(?:\/currently\/|\/actualidad\/|\/what-we-do\/|\/que-hacemos\/|\/news\/|\/noticias\/|\/topics\/|\/proyectos\/|\/projects\/|\/funding|\/financiamient|\/opportunities|\/calls?)[^"']*)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/caf\.com/i.test(abs)) continue;
+    try {
+      const path = new URL(abs).pathname.replace(/\/$/, "") || "/";
+      if (path === "/" || path.split("/").filter(Boolean).length < 2) continue;
+    } catch {
+      continue;
+    }
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "CAF opportunity",
+        url: abs,
+        snippet: "portal-parser:caf-latam",
+        parser: "caf-latam",
+      },
+      max
+    );
+  }
+  return out;
+}
+
+/** UNECA — UN Economic Commission for Africa events / news / publications */
+export function parseUnecaAfrica(html: string, pageUrl: string, max = 60): PortalDeepLink[] {
+  const seen = new Set<string>();
+  const out: PortalDeepLink[] = [];
+  const hrefRe =
+    /href\s*=\s*["']([^"']*(?:\/events?\/|\/news\/|\/stories\/|\/publications?\/|\/funding|\/opportunities|\/procurement|\/calls?\/|\/projects?\/)[^"']*)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/uneca\.org/i.test(abs)) continue;
+    try {
+      const path = new URL(abs).pathname.replace(/\/$/, "") || "/";
+      if (path === "/" || path.split("/").filter(Boolean).length < 2) continue;
+    } catch {
+      continue;
+    }
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "UNECA opportunity",
+        url: abs,
+        snippet: "portal-parser:uneca-africa",
+        parser: "uneca-africa",
+      },
+      max
+    );
+  }
+  return out;
+}
+
+/** UNESCWA — Western Asia events / news / funding / opportunities */
+export function parseUnescwaMena(html: string, pageUrl: string, max = 60): PortalDeepLink[] {
+  const seen = new Set<string>();
+  const out: PortalDeepLink[] = [];
+  const hrefRe =
+    /href\s*=\s*["']([^"']*(?:\/events?\/|\/news\/|\/publications?\/|\/funding|\/opportunities|\/procurement|\/calls?\/|\/projects?\/|\/sites\/default\/files)[^"']*)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/unescwa\.org/i.test(abs)) continue;
+    try {
+      const path = new URL(abs).pathname.replace(/\/$/, "") || "/";
+      if (path === "/" || path.split("/").filter(Boolean).length < 2) continue;
+    } catch {
+      continue;
+    }
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "UNESCWA opportunity",
+        url: abs,
+        snippet: "portal-parser:unescwa-mena",
+        parser: "unescwa-mena",
+      },
+      max
+    );
+  }
+  return out;
+}
+
+/** EBRD — procurement notices / news / project opportunities */
+export function parseEbrdMena(html: string, pageUrl: string, max = 60): PortalDeepLink[] {
+  const seen = new Set<string>();
+  const out: PortalDeepLink[] = [];
+  const hrefRe =
+    /href\s*=\s*["']([^"']*(?:\/procurement\/|\/work-with-us\/|\/news\/|\/projects\/|\/project\/|\/tenders?\/|\/notices?\/|\/opportunities)[^"']*)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = hrefRe.exec(html)) !== null && out.length < max) {
+    let abs = "";
+    try {
+      abs = new URL(m[1], pageUrl).href;
+    } catch {
+      continue;
+    }
+    if (!/ebrd\.com/i.test(abs)) continue;
+    try {
+      const path = new URL(abs).pathname.replace(/\/$/, "") || "/";
+      if (path === "/" || path.split("/").filter(Boolean).length < 2) continue;
+      if (/\/(login|search|tag|careers|privacy)(\/|$)/i.test(path)) continue;
+    } catch {
+      continue;
+    }
+    pushUnique(
+      out,
+      seen,
+      {
+        title: titleNear(html, m[1]) || "EBRD opportunity",
+        url: abs,
+        snippet: "portal-parser:ebrd-mena",
+        parser: "ebrd-mena",
+      },
+      max
+    );
+  }
+  return out;
+}
+
 /**
  * Run the matching portal parser (if any). Returns null when no dedicated parser applies.
  */
@@ -680,6 +1042,30 @@ export function extractPortalDeepLinks(
       break;
     case "isdb-mena":
       links = parseIsdb(html, pageUrl, max);
+      break;
+    case "canada-grants":
+      links = parseCanadaGrants(html, pageUrl, max);
+      break;
+    case "nz-grants":
+      links = parseNzGrants(html, pageUrl, max);
+      break;
+    case "es-grants":
+      links = parseEsGrants(html, pageUrl, max);
+      break;
+    case "cepal-latam":
+      links = parseCepalLatam(html, pageUrl, max);
+      break;
+    case "caf-latam":
+      links = parseCafLatam(html, pageUrl, max);
+      break;
+    case "uneca-africa":
+      links = parseUnecaAfrica(html, pageUrl, max);
+      break;
+    case "unescwa-mena":
+      links = parseUnescwaMena(html, pageUrl, max);
+      break;
+    case "ebrd-mena":
+      links = parseEbrdMena(html, pageUrl, max);
       break;
   }
 

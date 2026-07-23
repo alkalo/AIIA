@@ -200,7 +200,7 @@ const GRANT_BOARDS_BY_REGION: GrantBoards[] = [
   {
     id: "latam",
     match: /latam|latin america|latinoam|mexico|brasil|argentina|chile|colombia/i,
-    boards: ["fundsforngos.org", "iadb.org", "cepal.org"],
+    boards: ["fundsforngos.org", "iadb.org", "cepal.org", "caf.com"],
   },
   {
     id: "asia",
@@ -529,6 +529,11 @@ const REGION_SEEDS: Record<Exclude<GrantRegionId, "global">, GrantPortalSeed[]> 
       snippet: "Portal seed: Canadian government grants.",
     },
     {
+      title: "IDRC — Funding",
+      url: "https://idrc-crdi.ca/en/funding",
+      snippet: "Portal seed: IDRC research funding opportunities.",
+    },
+    {
       title: "Community Foundations of Canada",
       url: "https://communityfoundations.ca/",
       snippet: "Portal seed: Canadian community foundations network.",
@@ -536,9 +541,9 @@ const REGION_SEEDS: Record<Exclude<GrantRegionId, "global">, GrantPortalSeed[]> 
   ],
   es: [
     {
-      title: "BOE — Boletín Oficial del Estado",
-      url: "https://www.boe.es/",
-      snippet: "Portal seed: convocatorias España.",
+      title: "BOE — Ayudas y subvenciones",
+      url: "https://www.boe.es/buscar/ayudas.php",
+      snippet: "Portal seed: convocatorias y ayudas BOE.",
     },
     {
       title: "Sede Administración — ayudas",
@@ -562,6 +567,16 @@ const REGION_SEEDS: Record<Exclude<GrantRegionId, "global">, GrantPortalSeed[]> 
       url: "https://www.iadb.org/en/how-we-can-work-together",
       snippet: "Portal seed: Inter-American Development Bank.",
     },
+    {
+      title: "CEPAL / ECLAC — Projects & events",
+      url: "https://www.cepal.org/en/projects",
+      snippet: "Portal seed: UN Economic Commission for Latin America and the Caribbean.",
+    },
+    {
+      title: "CAF — News & opportunities",
+      url: "https://www.caf.com/en/currently/news/",
+      snippet: "Portal seed: CAF Development Bank of Latin America.",
+    },
   ],
   asia: [
     {
@@ -582,9 +597,14 @@ const REGION_SEEDS: Record<Exclude<GrantRegionId, "global">, GrantPortalSeed[]> 
       snippet: "Portal seed: AfDB procurement / business opportunities.",
     },
     {
-      title: "UNECA — Opportunities",
-      url: "https://www.uneca.org/",
-      snippet: "Portal seed: UN Economic Commission for Africa.",
+      title: "UNECA — Events & news",
+      url: "https://www.uneca.org/events",
+      snippet: "Portal seed: UN Economic Commission for Africa events.",
+    },
+    {
+      title: "UNECA — News",
+      url: "https://www.uneca.org/stories",
+      snippet: "Portal seed: UNECA stories and announcements.",
     },
     {
       title: "Funds for NGOs — Africa",
@@ -599,14 +619,24 @@ const REGION_SEEDS: Record<Exclude<GrantRegionId, "global">, GrantPortalSeed[]> 
       snippet: "Portal seed: IsDB development financing / opportunities.",
     },
     {
-      title: "UNESCWA — Opportunities",
-      url: "https://www.unescwa.org/",
-      snippet: "Portal seed: UN Economic and Social Commission for Western Asia.",
+      title: "UNESCWA — Events",
+      url: "https://www.unescwa.org/events",
+      snippet: "Portal seed: UNESCWA events and calls.",
+    },
+    {
+      title: "UNESCWA — News",
+      url: "https://www.unescwa.org/news",
+      snippet: "Portal seed: UNESCWA news and opportunities.",
     },
     {
       title: "EBRD — Procurement notices",
       url: "https://www.ebrd.com/work-with-us/procurement/notices.html",
       snippet: "Portal seed: EBRD procurement (Europe + MENA overlap).",
+    },
+    {
+      title: "EBRD — News",
+      url: "https://www.ebrd.com/news.html",
+      snippet: "Portal seed: EBRD news and project announcements.",
     },
     {
       title: "Funds for NGOs — Middle East",

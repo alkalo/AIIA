@@ -99,9 +99,9 @@ import {
 } from "./coverage-report.js";
 import { isNewsletterWrapTarget } from "./newsletter.js";
 import { flattenWrapLaneQueries } from "./wrap-lanes.js";
-import { sectorNewsQueryPack, sectorNewsPortalSeeds } from "./news-sources.js";
+import { sectorNewsQueryPack, sectorNewsPortalSeeds, sectorNewsPortalSeedsForRegions } from "./news-sources.js";
 import { opportunityDiscoveryQueries } from "./opportunity-lanes.js";
-import { applyCurationPipeline, collectKnownFingerprints } from "./curation.js";
+import { applyCurationPipeline, applyCurationScoreFloor, collectKnownFingerprints } from "./curation.js";
 import {
   extractOpportunityDeepLinks,
   isExpandableListingPage,
@@ -116,6 +116,23 @@ import {
   readHealthHistory,
 } from "./source-health.js";
 import { countDiscoveryOrigins } from "./discovery-origin.js";
+import {
+  applyOriginPreferenceBoost,
+  feedCapForHistory,
+  formatOriginBoostSummary,
+  originBoostMapFromHistory,
+  pinStrongOriginsFromHistory,
+  expandCapExtraFromHistory,
+  depth2CapForHistory,
+  paginationBudgetFromHistory,
+  gapFillCapExtraFromHistory,
+} from "./origin-preference.js";
+import {
+  applyApprovedBoost,
+  buildApprovedSignals,
+  formatApprovedBoostSummary,
+  hasReviewSignals,
+} from "./approved-boost.js";
 import {
   extractPortalDetails,
   formatPortalDetailHints,
@@ -163,7 +180,7 @@ import {
 } from "./opportunity-subtype.js";
 import { sortByDeadlineAsc } from "./deadline.js";
 
-async function loadPriorFingerprints(dataDir: string, agentId: string): Promise<Set<string>> {
+async function loadPriorInboxItems(dataDir: string, agentId: string): Promise<ExtractedItem[]> {
   const dir = join(dataDir, "inbox", agentId);
   const prior: ExtractedItem[] = [];
   try {
@@ -182,7 +199,11 @@ async function loadPriorFingerprints(dataDir: string, agentId: string): Promise<
   } catch {
     /* no prior inbox */
   }
-  return collectKnownFingerprints(prior, true);
+  return prior;
+}
+
+async function loadPriorFingerprints(dataDir: string, agentId: string): Promise<Set<string>> {
+  return collectKnownFingerprints(await loadPriorInboxItems(dataDir, agentId), true);
 }
 
 const GRANT_WAVE_FALLBACKS = [
@@ -276,50 +297,6 @@ function shouldStopForEmptyWaves(
 
 const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Keep concrete opportunities that multipass wrongly scored near zero. */
-function applyOpportunityScoreFloor(items: ExtractedItem[], spec: AgentSpec): ExtractedItem[] {
-  if (!isGrantTarget(spec) && !isCurationOpportunityTarget(spec)) return items;
-  return items.map((item) => {
-    const program = String(item.program_name ?? item.title ?? "").trim();
-    const org = String(item.organization ?? "").trim();
-    const url = String(item.url ?? "").trim();
-    const coverage = hasCoverageProvenance(
-      item.reason,
-      item.summary,
-      item.description,
-      item.snippet
-    );
-    const rich =
-      Boolean(program) &&
-      Boolean(
-        org ||
-          item.deadline ||
-          item.max_funding ||
-          item.value_or_benefit ||
-          item.eligibility
-      );
-    if ((!rich && !coverage) || !url) return item;
-    const score = Number(item.score ?? 0);
-    const floor = coverage
-      ? 55
-      : isDirectGrantUrl(url)
-        ? 58
-        : isLowQualityGrantUrl(url)
-          ? 42
-          : 52;
-    if (score >= floor) return item;
-    return {
-      ...item,
-      score: floor,
-      reason: item.reason
-        ? `${item.reason} (floor ${floor})`
-        : coverage
-          ? `Coverage seed — score floor ${floor}`
-          : `Concrete opportunity — score floor ${floor}`,
-    };
-  });
-}
-
 export type ProgressCallback = (event: ProgressEvent) => void;
 
 export class Executor {
@@ -343,6 +320,17 @@ export class Executor {
     portalDetailCount: 0,
     feedSkippedCount: 0,
     feedFailCount: 0,
+    adaptiveSoftExhaustive: false,
+    adaptiveFeedExtra: 0,
+    adaptiveRssSharePct: 0,
+    adaptiveOriginPinned: 0,
+    adaptiveOriginPinDetail: "",
+    adaptiveExpandExtra: 0,
+    adaptiveDepth2Extra: 0,
+    adaptivePaginationDetail: "",
+    adaptivePaginationPages: 0,
+    adaptivePaginationHubs: 0,
+    adaptiveGapFillExtra: 0,
   };
 
   constructor(ollama?: LlmClient) {
@@ -470,6 +458,17 @@ export class Executor {
       portalDetailCount: 0,
       feedSkippedCount: 0,
       feedFailCount: 0,
+      adaptiveSoftExhaustive: false,
+      adaptiveFeedExtra: 0,
+      adaptiveRssSharePct: 0,
+      adaptiveOriginPinned: 0,
+      adaptiveOriginPinDetail: "",
+      adaptiveExpandExtra: 0,
+      adaptiveDepth2Extra: 0,
+      adaptivePaginationDetail: "",
+      adaptivePaginationPages: 0,
+      adaptivePaginationHubs: 0,
+      adaptiveGapFillExtra: 0,
     };
     let webEngines: RunnableSearchEngineId[] = enginesForEffort(effort);
     try {
@@ -680,11 +679,27 @@ export class Executor {
         );
       }
 
-      // Cap feeds per run; parallel fetch so more regions complete within wall-clock.
-      const feedCap = Math.min(
-        feeds.length,
-        isGrantTarget(spec) || isCurationOpportunityTarget(spec) ? 28 : 16
-      );
+      // Cap feeds per run; raise cap when RSS historically produced many finals.
+      const baseFeedCap =
+        isGrantTarget(spec) || isCurationOpportunityTarget(spec) ? 28 : 20;
+      let feedCap = Math.min(feeds.length, baseFeedCap);
+      try {
+        const histForRss = await readHealthHistory(dataDir, spec.id, 12);
+        const rssCap = feedCapForHistory(baseFeedCap, histForRss);
+        feedCap = Math.min(feeds.length, rssCap.cap);
+        if (rssCap.extra > 0) {
+          this.runHealth.adaptiveFeedExtra = rssCap.extra;
+          this.runHealth.adaptiveRssSharePct = Math.round(rssCap.rssShare * 100);
+          log(
+            LogAction.INFO,
+            `RSS fuerte en historial (${this.runHealth.adaptiveRssSharePct}% finales) → +${rssCap.extra} feeds (cap ${feedCap})`,
+            undefined,
+            "searching"
+          );
+        }
+      } catch {
+        /* soft-fail */
+      }
       const feedsToFetch = feeds.slice(0, feedCap);
       let feedHits = 0;
       const seenFeedUrls = new Set<string>();
@@ -759,6 +774,54 @@ export class Executor {
           LogAction.INFO,
           `Host-health: boost histórico (${hostBoosts.size} hosts)`,
           formatHostHealthBoostSummary(hostBoosts),
+          "planning"
+        );
+      }
+    } catch {
+      /* soft-fail */
+    }
+
+    // Prefer discovery channels that historically produced finals (seeds/RSS/expand vs SERP).
+    try {
+      const hist = await readHealthHistory(dataDir, spec.id, 12);
+      const originBoosts = originBoostMapFromHistory(hist);
+      if (originBoosts.size > 0 && rankedSources.length > 0) {
+        rankedSources = applyOriginPreferenceBoost(rankedSources, originBoosts);
+        log(
+          LogAction.INFO,
+          `Origin-pref: canales productivos (${originBoosts.size})`,
+          formatOriginBoostSummary(originBoosts),
+          "planning"
+        );
+      }
+      const originPin = pinStrongOriginsFromHistory(rankedSources, hist);
+      if (originPin.pinned > 0) {
+        rankedSources = originPin.ranked;
+        this.runHealth.adaptiveOriginPinned = originPin.pinned;
+        this.runHealth.adaptiveOriginPinDetail = originPin.strongOrigins.join(", ");
+        log(
+          LogAction.INFO,
+          `Origin-pin: ${originPin.pinned} fuentes high (${originPin.strongOrigins.join(", ")})`,
+          Object.entries(originPin.byOrigin)
+            .map(([k, n]) => `${k}:${n}`)
+            .join(", "),
+          "planning"
+        );
+      }
+    } catch {
+      /* soft-fail */
+    }
+
+    // Human-approved Inbox hosts/orgs: prefer what the reviewer kept.
+    try {
+      const prior = await loadPriorInboxItems(dataDir, spec.id);
+      const approved = buildApprovedSignals(prior);
+      if (rankedSources.length > 0 && hasReviewSignals(approved)) {
+        rankedSources = applyApprovedBoost(rankedSources, approved);
+        log(
+          LogAction.INFO,
+          "Review-boost: señales de Inbox (approve/reject)",
+          formatApprovedBoostSummary(approved),
           "planning"
         );
       }
@@ -1107,11 +1170,13 @@ export class Executor {
       const emergencyPortals =
         isGrantTarget(spec) || isCurationOpportunityTarget(spec)
           ? grantPortalDeepLinkSeeds(spec)
-          : isRealEstateTarget(spec)
-            ? realEstatePortalDeepLinkSeeds(spec)
-            : isJobTarget(spec)
-              ? jobPortalDeepLinkSeeds(spec)
-              : [];
+          : isSectorNewsTarget(spec)
+            ? sectorNewsPortalSeeds(spec.prompt || "")
+            : isRealEstateTarget(spec)
+              ? realEstatePortalDeepLinkSeeds(spec)
+              : isJobTarget(spec)
+                ? jobPortalDeepLinkSeeds(spec)
+                : [];
       if (emergencyPortals.length > 0) {
         rankedSources = emergencyPortals.map((s) => {
           const fetchable = !isBarePortalHomepage(s.url);
@@ -1154,13 +1219,41 @@ export class Executor {
     } catch {
       /* soft-fail */
     }
+    try {
+      const hist = await readHealthHistory(dataDir, spec.id, 12);
+      const originBoosts = originBoostMapFromHistory(hist);
+      if (originBoosts.size > 0) {
+        rankedSources = applyOriginPreferenceBoost(rankedSources, originBoosts);
+      }
+      const originPin = pinStrongOriginsFromHistory(rankedSources, hist);
+      if (originPin.pinned > 0) {
+        rankedSources = originPin.ranked;
+        if (originPin.pinned > this.runHealth.adaptiveOriginPinned) {
+          this.runHealth.adaptiveOriginPinned = originPin.pinned;
+          this.runHealth.adaptiveOriginPinDetail = originPin.strongOrigins.join(", ");
+        }
+      }
+    } catch {
+      /* soft-fail */
+    }
+    try {
+      const prior = await loadPriorInboxItems(dataDir, spec.id);
+      const approved = buildApprovedSignals(prior);
+      if (hasReviewSignals(approved)) {
+        rankedSources = applyApprovedBoost(rankedSources, approved);
+      }
+    } catch {
+      /* soft-fail */
+    }
     const pinnedHigh = rankedSources.filter((r) => r.fetchPriority === "high").length;
     const requestedRegions = requestedRegionsForSpec(spec.prompt || "", spec.filters.criteria || "");
     const exhaustiveGlobal =
       requestedRegions.has("global") &&
-      (isGrantTarget(spec) || isCurationOpportunityTarget(spec));
+      (isGrantTarget(spec) ||
+        isCurationOpportunityTarget(spec) ||
+        isSectorNewsTarget(spec));
     const earlyGaps =
-      isGrantTarget(spec) || isCurationOpportunityTarget(spec)
+      isGrantTarget(spec) || isCurationOpportunityTarget(spec) || isSectorNewsTarget(spec)
         ? uncoveredRegions(
             rankedSources.map((r) => r.url),
             requestedRegions
@@ -1206,13 +1299,14 @@ export class Executor {
         log
       );
 
-      // Expand listing / portal pages into concrete opportunity deep links, then fetch them.
+      // Expand listing / portal pages into concrete deep links, then fetch them.
       if (
         isGrantTarget(spec) ||
         isCurationOpportunityTarget(spec) ||
         isProgramsTarget(spec) ||
         isAwardsTarget(spec) ||
-        isExposureTarget(spec)
+        isExposureTarget(spec) ||
+        isSectorNewsTarget(spec)
       ) {
         rankedSources = await this.expandListingPages(
           rankedSources,
@@ -1222,7 +1316,32 @@ export class Executor {
           scraperOptions,
           progress,
           log,
-          { exhaustive: exhaustiveGlobal, gapCount: earlyGaps.length }
+          {
+            exhaustive: exhaustiveGlobal,
+            gapCount: earlyGaps.length,
+            historyExtra: await (async () => {
+              if (this.runHealth.adaptiveExpandExtra > 0) {
+                return this.runHealth.adaptiveExpandExtra;
+              }
+              const extra = await readHealthHistory(dataDir, spec.id, 12)
+                .then((h) => expandCapExtraFromHistory(h))
+                .catch(() => 0);
+              this.runHealth.adaptiveExpandExtra = extra;
+              return extra;
+            })(),
+            ...(await readHealthHistory(dataDir, spec.id, 12)
+              .then((h) => {
+                const p = paginationBudgetFromHistory(h);
+                if (p.detail) this.runHealth.adaptivePaginationDetail = p.detail;
+                this.runHealth.adaptivePaginationPages = p.pagesPerHub;
+                this.runHealth.adaptivePaginationHubs = p.maxHubs;
+                return {
+                  paginationPages: p.pagesPerHub,
+                  paginationHubs: p.maxHubs,
+                };
+              })
+              .catch(() => ({}) as { paginationPages?: number; paginationHubs?: number })),
+          }
         );
         rankedSources = await this.expandDepth2Related(
           rankedSources,
@@ -1231,18 +1350,53 @@ export class Executor {
           sessions,
           scraperOptions,
           progress,
-          log
-        );
-        rankedSources = await this.gapFillUncoveredRegions(
-          rankedSources,
-          maxSources,
-          spec,
-          sessions,
-          scraperOptions,
-          progress,
           log,
-          { exhaustive: exhaustiveGlobal, phase: bPhase }
+          {
+            historyExtra: await readHealthHistory(dataDir, spec.id, 12)
+              .then((h) => {
+                const d = depth2CapForHistory(
+                  Math.min(16, Math.max(6, Math.floor(maxSources / 8))),
+                  h
+                );
+                this.runHealth.adaptiveDepth2Extra = d.extra;
+                return d.extra;
+              })
+              .catch(() => 0),
+          }
         );
+        // Gap-fill injects region portal seeds (grants or news hubs).
+        if (
+          isGrantTarget(spec) ||
+          isCurationOpportunityTarget(spec) ||
+          isProgramsTarget(spec) ||
+          isAwardsTarget(spec) ||
+          isExposureTarget(spec) ||
+          isSectorNewsTarget(spec)
+        ) {
+          rankedSources = await this.gapFillUncoveredRegions(
+            rankedSources,
+            maxSources,
+            spec,
+            sessions,
+            scraperOptions,
+            progress,
+            log,
+            {
+              exhaustive: exhaustiveGlobal,
+              phase: bPhase,
+              historyExtra: this.runHealth.adaptiveExpandExtra,
+              paginationPages: this.runHealth.adaptivePaginationPages || undefined,
+              paginationHubs: this.runHealth.adaptivePaginationHubs || undefined,
+              gapFillExtra: await readHealthHistory(dataDir, spec.id, 12)
+                .then((h) => {
+                  const extra = gapFillCapExtraFromHistory(h);
+                  this.runHealth.adaptiveGapFillExtra = extra;
+                  return extra;
+                })
+                .catch(() => 0),
+            }
+          );
+        }
       }
     }
 
@@ -1304,20 +1458,21 @@ export class Executor {
 
     progress("filtering", 72, "Filtrando y ordenando…", { action: LogAction.LLM_SCORE });
     let filtered = await this.filterItems(extracted, spec, cfg, rankedSources);
-    filtered = applyOpportunityScoreFloor(filtered, spec);
+    filtered = applyCurationScoreFloor(filtered, spec, exhaustiveGlobal);
 
     if (profile.useCritic && this.criticModel && filtered.length > 0) {
       const deepTarget =
         isRealEstateTarget(spec) ||
         isGrantTarget(spec) ||
         isCurationOpportunityTarget(spec) ||
-        isJobTarget(spec);
+        isJobTarget(spec) ||
+        isSectorNewsTarget(spec);
       const allHeuristic = filtered.every(
         (i) =>
           !i.reason ||
           /heuristic|serp fallback|extracted/i.test(String(i.reason))
       );
-      // Never skip critic on deep opportunity runs — heuristic seeds need LLM re-score.
+      // Never skip critic on deep opportunity/news runs — heuristic seeds need LLM re-score.
       if (!deepTarget && allHeuristic && filtered.length <= 5) {
         log(
           LogAction.INFO,
@@ -1332,7 +1487,7 @@ export class Executor {
         });
         const beforeTop = filtered.slice(0, 5).map((i) => `${truncate(String(i.title ?? i.url), 40)} (${i.score ?? "?"})`);
         filtered = await this.criticPass(filtered, spec, cfg);
-        filtered = applyOpportunityScoreFloor(filtered, spec);
+        filtered = applyCurationScoreFloor(filtered, spec, exhaustiveGlobal);
         log(
           LogAction.LLM_CRITIC,
           `Revisión Pro con ${this.criticModel}`,
@@ -1349,7 +1504,23 @@ export class Executor {
       }
     }
 
-    const minScore = effectiveMinScore(effort, spec.filters.minScore ?? 70);
+    const softExhaustive =
+      exhaustiveGlobal &&
+      (isGrantTarget(spec) ||
+        isCurationOpportunityTarget(spec) ||
+        isSectorNewsTarget(spec));
+    const minScore = effectiveMinScore(effort, spec.filters.minScore ?? 70, {
+      exhaustive: softExhaustive,
+    });
+    if (softExhaustive) {
+      this.runHealth.adaptiveSoftExhaustive = true;
+      log(
+        LogAction.INFO,
+        `Curación exhaustiva suave: umbral ≥ ${minScore} (cobertura > agresividad)`,
+        undefined,
+        "filtering"
+      );
+    }
     let finalItems = filtered
       .map((item) => normalizeExtractedItem(item))
       .filter((item) => validateOpportunityResult(item, spec))
@@ -1405,6 +1576,27 @@ export class Executor {
           .filter((item) => Boolean(item.url))
           .slice(0, 12);
       }
+      if (
+        finalItems.length === 0 &&
+        isSectorNewsTarget(spec) &&
+        !isGrantTarget(spec) &&
+        !isCurationOpportunityTarget(spec)
+      ) {
+        finalItems = sectorNewsPortalSeeds(spec.prompt || "")
+          .map((s) => {
+            const item = normalizeExtractedItem({
+              title: s.title,
+              url: s.url,
+              description: s.snippet,
+              summary: s.snippet,
+              score: 60,
+              reason: "Portal news seed (SERP blocked / no deep listings)",
+            });
+            return { ...item, url: item.url ?? s.url, title: item.title ?? s.title };
+          })
+          .filter((item) => Boolean(item.url))
+          .slice(0, 12);
+      }
       if (finalItems.length === 0 && isJobTarget(spec) && !isGrantTarget(spec) && !isRealEstateTarget(spec)) {
         finalItems = jobPortalDeepLinkSeeds(spec)
           .map((s) => {
@@ -1440,20 +1632,23 @@ export class Executor {
       progress("filtering", 78, `Fallback SERP — ${finalItems.length} enlaces`);
     }
 
-    // Last resort / coverage merge: ensure portal seeds are present for grant/job/real-estate
+    // Last resort / coverage merge: ensure portal seeds are present for grant/news/job/real-estate
     // even when a weak SERP item already filled finalItems, or SERP was exhausted.
     if (
       isGrantTarget(spec) ||
       isCurationOpportunityTarget(spec) ||
+      isSectorNewsTarget(spec) ||
       isJobTarget(spec) ||
       isRealEstateTarget(spec)
     ) {
       const portals =
         isGrantTarget(spec) || isCurationOpportunityTarget(spec)
           ? grantPortalDeepLinkSeeds(spec)
-          : isRealEstateTarget(spec)
-            ? realEstatePortalDeepLinkSeeds(spec)
-            : jobPortalDeepLinkSeeds(spec);
+          : isSectorNewsTarget(spec)
+            ? sectorNewsPortalSeeds(spec.prompt || "")
+            : isRealEstateTarget(spec)
+              ? realEstatePortalDeepLinkSeeds(spec)
+              : jobPortalDeepLinkSeeds(spec);
       if (
         portals.length > 0 &&
         (finalItems.length < 3 || runSerpExhausted || emptySerpWaves >= 2)
@@ -1516,6 +1711,7 @@ export class Executor {
         knownFingerprints: known,
         minDaysRemaining: spec.filters.minDaysRemaining,
         maxNewsAgeDays: spec.filters.maxAgeDays,
+        exhaustiveSoft: softExhaustive,
       });
       finalItems = kept;
       const reasons = new Map<string, number>();
@@ -1534,10 +1730,14 @@ export class Executor {
       // If curation wiped everything after a thin SERP run, reinject portal coverage seeds.
       if (
         finalItems.length === 0 &&
-        (isGrantTarget(spec) || isCurationOpportunityTarget(spec)) &&
+        (isGrantTarget(spec) || isCurationOpportunityTarget(spec) || isSectorNewsTarget(spec)) &&
         (runSerpExhausted || emptySerpWaves >= 2 || rankedSources.length > 0)
       ) {
-        finalItems = grantPortalDeepLinkSeeds(spec)
+        const rescueSeeds =
+          isSectorNewsTarget(spec) && !isGrantTarget(spec) && !isCurationOpportunityTarget(spec)
+            ? sectorNewsPortalSeeds(spec.prompt || "")
+            : grantPortalDeepLinkSeeds(spec);
+        finalItems = rescueSeeds
           .map((s) =>
             normalizeExtractedItem({
               title: s.title,
@@ -1592,6 +1792,18 @@ export class Executor {
 
     const originCounts = countDiscoveryOrigins(finalItems);
 
+    const adaptiveMeta = {
+      softExhaustive: this.runHealth.adaptiveSoftExhaustive || undefined,
+      feedExtra: this.runHealth.adaptiveFeedExtra || undefined,
+      rssSharePct: this.runHealth.adaptiveRssSharePct || undefined,
+      originPinned: this.runHealth.adaptiveOriginPinned || undefined,
+      originPinDetail: this.runHealth.adaptiveOriginPinDetail || undefined,
+      expandExtra: this.runHealth.adaptiveExpandExtra || undefined,
+      depth2Extra: this.runHealth.adaptiveDepth2Extra || undefined,
+      paginationDetail: this.runHealth.adaptivePaginationDetail || undefined,
+      gapFillExtra: this.runHealth.adaptiveGapFillExtra || undefined,
+    };
+
     const healthText = formatSourceHealthReport({
       serpEngineHits: Object.fromEntries(
         Object.entries(engineTotals).map(([k, v]) => [k, v ?? 0])
@@ -1613,6 +1825,7 @@ export class Executor {
         .then((fh) => formatFeedHealthSummary(fh).lines)
         .catch(() => [] as string[]),
       originCounts,
+      adaptive: adaptiveMeta,
     });
 
     log(LogAction.INFO, "Salud de fuentes del run", healthText, "filtering");
@@ -1653,6 +1866,7 @@ export class Executor {
         Object.entries(engineTotals).map(([k, v]) => [k, v ?? 0])
       ),
       originCounts,
+      adaptive: adaptiveMeta,
     });
 
     try {
@@ -1919,7 +2133,7 @@ export class Executor {
 
   /**
    * From fetched listing/portal HTML, harvest concrete opportunity URLs and fetch them.
-   * Also follows up to 2 pagination pages per expandable listing (bounded).
+   * Also follows bounded pagination pages per expandable listing (adaptive when expand wins).
    */
   private async expandListingPages(
     ranked: RankedSource[],
@@ -1929,13 +2143,20 @@ export class Executor {
     scraperOptions: ScraperOptions | undefined,
     progress: (phase: ProgressEvent["phase"], percent: number, message: string) => void,
     log: ActionLogger,
-    opts?: { exhaustive?: boolean; gapCount?: number }
+    opts?: {
+      exhaustive?: boolean;
+      gapCount?: number;
+      historyExtra?: number;
+      paginationPages?: number;
+      paginationHubs?: number;
+    }
   ): Promise<RankedSource[]> {
     const seen = new Set(ranked.map((r) => normalizeUrl(r.url)));
     const candidates: RankedSource[] = [];
     const expandCap = expandCapForExhaustive(maxSources, {
       exhaustive: opts?.exhaustive,
       gapCount: opts?.gapCount,
+      historyExtra: opts?.historyExtra,
     });
     const listingPages: { url: string; html: string }[] = [];
 
@@ -1944,10 +2165,12 @@ export class Executor {
       listingPages.push({ url: src.url, html: src.rawHtml });
     }
 
-    // Bounded pagination: fetch up to 2 extra pages per listing hub (max 4 hubs).
+    const pagesPerHub = Math.min(5, Math.max(2, opts?.paginationPages ?? 2));
+    const maxHubs = Math.min(8, Math.max(4, opts?.paginationHubs ?? 4));
+    // Bounded pagination: fetch up to N extra pages per listing hub (adaptive max hubs).
     const extraListingUrls: string[] = [];
-    for (const hub of listingPages.slice(0, 4)) {
-      for (const next of discoverListingPageUrls(hub.html, hub.url, 2)) {
+    for (const hub of listingPages.slice(0, maxHubs)) {
+      for (const next of discoverListingPageUrls(hub.html, hub.url, pagesPerHub)) {
         const key = normalizeUrl(next);
         if (seen.has(key)) continue;
         if (extraListingUrls.includes(next)) continue;
@@ -2051,7 +2274,7 @@ export class Executor {
 
   /**
    * Depth-2: from already-fetched opportunity pages, harvest a few related deep links
-   * (bounded — max 16 new URLs) when the page still looks like a mini-listing or hub.
+   * (bounded — base ≤16, up to 28 with historyExtra) when the page still looks like a mini-listing or hub.
    */
   private async expandDepth2Related(
     ranked: RankedSource[],
@@ -2060,11 +2283,13 @@ export class Executor {
     sessions: CredentialIndex,
     scraperOptions: ScraperOptions | undefined,
     progress: (phase: ProgressEvent["phase"], percent: number, message: string) => void,
-    log: ActionLogger
+    log: ActionLogger,
+    opts?: { historyExtra?: number }
   ): Promise<RankedSource[]> {
     if (ranked.length >= maxSources) return ranked;
     const seen = new Set(ranked.map((r) => normalizeUrl(r.url)));
-    const depth2Cap = Math.min(16, Math.max(6, Math.floor(maxSources / 8)));
+    const baseCap = Math.min(16, Math.max(6, Math.floor(maxSources / 8)));
+    const depth2Cap = Math.min(28, baseCap + Math.max(0, opts?.historyExtra ?? 0));
     const candidates: RankedSource[] = [];
 
     // Prefer pages that already have HTML and look expandable (related calls, hub crumbs).
@@ -2140,7 +2365,7 @@ export class Executor {
 
   /**
    * Mid-run gap-fill: if requested regions have zero URLs after expand, inject
-   * region portal seeds, fetch them, and expand listings once more (bounded).
+   * region portal seeds (grants or news hubs), fetch them, and expand listings once more.
    * Exhaustive runs get a larger seed pick + optional second pass if gaps remain.
    */
   private async gapFillUncoveredRegions(
@@ -2151,9 +2376,24 @@ export class Executor {
     scraperOptions: ScraperOptions | undefined,
     progress: (phase: ProgressEvent["phase"], percent: number, message: string) => void,
     log: ActionLogger,
-    opts?: { exhaustive?: boolean; phase?: BudgetPhase }
+    opts?: {
+      exhaustive?: boolean;
+      phase?: BudgetPhase;
+      historyExtra?: number;
+      paginationPages?: number;
+      paginationHubs?: number;
+      gapFillExtra?: number;
+    }
   ): Promise<RankedSource[]> {
-    if (!isGrantTarget(spec) && !isCurationOpportunityTarget(spec)) return ranked;
+    const newsMode =
+      isSectorNewsTarget(spec) && !isGrantTarget(spec) && !isCurationOpportunityTarget(spec);
+    if (
+      !isGrantTarget(spec) &&
+      !isCurationOpportunityTarget(spec) &&
+      !newsMode
+    ) {
+      return ranked;
+    }
 
     const requested = requestedRegionsForSpec(spec.prompt || "", spec.filters.criteria || "");
     let gaps = uncoveredRegions(
@@ -2168,9 +2408,11 @@ export class Executor {
       pickCap: number
     ): Promise<RankedSource[]> => {
       const seen = new Set(current.map((r) => normalizeUrl(r.url)));
-      const seeds = grantPortalSeedsForRegions(passGaps).filter(
-        (s) => !seen.has(normalizeUrl(s.url))
-      );
+      const seeds = (
+        newsMode
+          ? sectorNewsPortalSeedsForRegions(passGaps)
+          : grantPortalSeedsForRegions(passGaps)
+      ).filter((s) => !seen.has(normalizeUrl(s.url)));
       const pick = seeds.slice(0, pickCap);
       if (pick.length === 0) return current;
 
@@ -2178,7 +2420,7 @@ export class Executor {
       this.runHealth.seedCount += pick.length;
       log(
         LogAction.WEB_SEARCH,
-        `Gap-fill regional: ${passGaps.join(", ")} → ${pick.length} portales`,
+        `Gap-fill regional${newsMode ? " (news)" : ""}: ${passGaps.join(", ")} → ${pick.length} portales`,
         pick.map((p) => `  → ${p.title} (${truncateUrl(p.url)})`).join("\n"),
         "searching"
       );
@@ -2191,7 +2433,11 @@ export class Executor {
       const candidates: RankedSource[] = pick.map((s) => ({
         title: s.title,
         url: s.url,
-        snippet: s.snippet || `Gap-fill portal (${passGaps.join(",")})`,
+        snippet:
+          s.snippet ||
+          (newsMode
+            ? `Gap-fill news portal (${passGaps.join(",")})`
+            : `Gap-fill portal (${passGaps.join(",")})`),
         relevance: 88,
         fetchPriority: "high" as const,
         rankReason: `Gap-fill region: ${passGaps.join(",")}`,
@@ -2214,14 +2460,24 @@ export class Executor {
         scraperOptions,
         progress,
         log,
-        { exhaustive: opts?.exhaustive, gapCount: passGaps.length }
+        {
+          exhaustive: opts?.exhaustive,
+          gapCount: passGaps.length,
+          historyExtra: opts?.historyExtra,
+          paginationPages: opts?.paginationPages,
+          paginationHubs: opts?.paginationHubs,
+        }
       );
       return next;
     };
 
-    const baseCap = opts?.exhaustive
-      ? Math.min(24, Math.max(10, gaps.length * 4))
-      : Math.min(16, Math.max(6, gaps.length * 3));
+    const histExtra = Math.max(0, opts?.gapFillExtra ?? 0);
+    const baseCap = Math.min(
+      36,
+      (opts?.exhaustive
+        ? Math.min(24, Math.max(10, gaps.length * 4))
+        : Math.min(16, Math.max(6, gaps.length * 3))) + histExtra
+    );
     let next = await runPass(ranked, gaps, baseCap);
 
     // Second pass when exhaustive and still missing regions (bounded).
@@ -2237,7 +2493,8 @@ export class Executor {
           undefined,
           "searching"
         );
-        next = await runPass(next, gaps, Math.min(12, gaps.length * 3));
+        const pass2 = Math.min(18, gaps.length * 3 + Math.min(6, histExtra));
+        next = await runPass(next, gaps, pass2);
       }
     }
 
@@ -2257,7 +2514,9 @@ export class Executor {
       const oppHint =
         isGrantTarget(spec) || isCurationOpportunityTarget(spec)
           ? " For opportunities: score 0–25 only for bare hubs with no named program. Named open calls with org/deadline/funding/deep URL must stay ≥55."
-          : "";
+          : isSectorNewsTarget(spec)
+            ? " For sector news: score 0–25 only for bare section hubs. Concrete articles with a clear headline and deep URL must stay ≥50."
+            : "";
       const response = await this.ollama.chat(
         [
           {

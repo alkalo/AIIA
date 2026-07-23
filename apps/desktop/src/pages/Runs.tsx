@@ -28,6 +28,17 @@ type RunReport = {
   feedSkippedCount?: number;
   feedFailCount?: number;
   originCounts?: Record<string, number>;
+  adaptive?: {
+    softExhaustive?: boolean;
+    feedExtra?: number;
+    rssSharePct?: number;
+    originPinned?: number;
+    originPinDetail?: string;
+    expandExtra?: number;
+    depth2Extra?: number;
+    paginationDetail?: string;
+    gapFillExtra?: number;
+  };
   updatedAtMs: number;
 };
 
@@ -277,6 +288,45 @@ export function Runs() {
                                         : e;
                         return `${label}:${n}`;
                       })
+                      .join(" · ")}
+                  </span>
+                )}
+              {agentReport.adaptive &&
+                (agentReport.adaptive.softExhaustive ||
+                  (agentReport.adaptive.feedExtra ?? 0) > 0 ||
+                  (agentReport.adaptive.originPinned ?? 0) > 0 ||
+                  (agentReport.adaptive.expandExtra ?? 0) > 0 ||
+                  (agentReport.adaptive.depth2Extra ?? 0) > 0 ||
+                  Boolean(agentReport.adaptive.paginationDetail) ||
+                  (agentReport.adaptive.gapFillExtra ?? 0) > 0) && (
+                  <span title={agentReport.adaptive.originPinDetail || undefined}>
+                    {t("runs.healthAdaptive")}:{" "}
+                    {[
+                      agentReport.adaptive.softExhaustive ? t("runs.healthAdaptiveSoft") : null,
+                      agentReport.adaptive.feedExtra && agentReport.adaptive.feedExtra > 0
+                        ? `RSS+${agentReport.adaptive.feedExtra}${
+                            agentReport.adaptive.rssSharePct != null
+                              ? `(${agentReport.adaptive.rssSharePct}%)`
+                              : ""
+                          }`
+                        : null,
+                      agentReport.adaptive.originPinned && agentReport.adaptive.originPinned > 0
+                        ? `pin:${agentReport.adaptive.originPinned}`
+                        : null,
+                      agentReport.adaptive.expandExtra && agentReport.adaptive.expandExtra > 0
+                        ? `expand+${agentReport.adaptive.expandExtra}`
+                        : null,
+                      agentReport.adaptive.depth2Extra && agentReport.adaptive.depth2Extra > 0
+                        ? `depth2+${agentReport.adaptive.depth2Extra}`
+                        : null,
+                      agentReport.adaptive.paginationDetail
+                        ? `page:${agentReport.adaptive.paginationDetail}`
+                        : null,
+                      agentReport.adaptive.gapFillExtra && agentReport.adaptive.gapFillExtra > 0
+                        ? `gap+${agentReport.adaptive.gapFillExtra}`
+                        : null,
+                    ]
+                      .filter(Boolean)
                       .join(" · ")}
                   </span>
                 )}

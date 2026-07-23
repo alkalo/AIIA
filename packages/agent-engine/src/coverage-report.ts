@@ -7,18 +7,18 @@ import type { ExtractedItem } from "./types.js";
 export type CoverageRegion = GrantRegionId | "unknown";
 
 const HOST_REGION: { re: RegExp; region: GrantRegionId }[] = [
-  { re: /\.gov\.au|communitygrants|frrr\.org|philanthropy\.org\.au|grantly\.au|probonoaustralia/i, region: "au" },
+  { re: /\.gov\.au|communitygrants|frrr\.org|philanthropy\.org\.au|grantly\.au|probonoaustralia|socialenterprise\.org\.au|communitydirectors|impactinvestingaustralia/i, region: "au" },
   { re: /govt\.nz|communitymatters/i, region: "nz" },
   { re: /europa\.eu|cordis\.|euractiv/i, region: "eu" },
   { re: /gov\.uk|tnlcommunityfund|grantfinder/i, region: "uk" },
-  { re: /grants\.gov|instrumentl|foundationcenter/i, region: "us" },
-  { re: /canada\.ca/i, region: "ca" },
-  { re: /boe\.es|cdti\.es|enisa\.es|gob\.es|compromisoempresarial/i, region: "es" },
-  { re: /iadb\.org|cepal\.org|caf\.com/i, region: "latam" },
+  { re: /grants\.gov|instrumentl|foundationcenter|philanthropynewsdigest/i, region: "us" },
+  { re: /canada\.ca|communityfoundations\.ca|idrc-crdi\.ca/i, region: "ca" },
+  { re: /boe\.es|cdti\.es|enisa\.es|gob\.es|compromisoempresarial|administracion\.gob\.es/i, region: "es" },
+  { re: /iadb\.org|cepal\.org|eclac\.org|caf\.com/i, region: "latam" },
   { re: /adb\.org/i, region: "asia" },
   { re: /afdb\.org|uneca\.org/i, region: "africa" },
   { re: /isdb\.org|unescwa\.org|ebrd\.com/i, region: "mena" },
-  { re: /fundsforngos|globalgiving|devex\.com|terravivagrants|ssir\.org|candid\.org|worldbank\.org|undp\.org/i, region: "global" },
+  { re: /fundsforngos|globalgiving|devex\.com|terravivagrants|ssir\.org|candid\.org|worldbank\.org|undp\.org|alliancemagazine/i, region: "global" },
 ];
 
 export function inferItemRegion(item: {

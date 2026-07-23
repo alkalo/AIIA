@@ -58,6 +58,17 @@ export function Inbox() {
     feedSkippedCount?: number;
     feedFailCount?: number;
     originCounts?: Record<string, number>;
+    adaptive?: {
+      softExhaustive?: boolean;
+      feedExtra?: number;
+      rssSharePct?: number;
+      originPinned?: number;
+      originPinDetail?: string;
+      expandExtra?: number;
+      depth2Extra?: number;
+      paginationDetail?: string;
+      gapFillExtra?: number;
+    };
     updatedAtMs: number;
   } | null>(null);
   const [runReportLoading, setRunReportLoading] = useState(false);
@@ -565,6 +576,45 @@ export function Inbox() {
                                           : e;
                           return `${label}:${n}`;
                         })
+                        .join(" · ")}
+                    </span>
+                  )}
+                {runReport.adaptive &&
+                  (runReport.adaptive.softExhaustive ||
+                    (runReport.adaptive.feedExtra ?? 0) > 0 ||
+                    (runReport.adaptive.originPinned ?? 0) > 0 ||
+                    (runReport.adaptive.expandExtra ?? 0) > 0 ||
+                    (runReport.adaptive.depth2Extra ?? 0) > 0 ||
+                    Boolean(runReport.adaptive.paginationDetail) ||
+                    (runReport.adaptive.gapFillExtra ?? 0) > 0) && (
+                    <span title={runReport.adaptive.originPinDetail || undefined}>
+                      {t("inbox.runHealthAdaptive")}:{" "}
+                      {[
+                        runReport.adaptive.softExhaustive ? t("inbox.runHealthAdaptiveSoft") : null,
+                        runReport.adaptive.feedExtra && runReport.adaptive.feedExtra > 0
+                          ? `RSS+${runReport.adaptive.feedExtra}${
+                              runReport.adaptive.rssSharePct != null
+                                ? `(${runReport.adaptive.rssSharePct}%)`
+                                : ""
+                            }`
+                          : null,
+                        runReport.adaptive.originPinned && runReport.adaptive.originPinned > 0
+                          ? `pin:${runReport.adaptive.originPinned}`
+                          : null,
+                        runReport.adaptive.expandExtra && runReport.adaptive.expandExtra > 0
+                          ? `expand+${runReport.adaptive.expandExtra}`
+                          : null,
+                        runReport.adaptive.depth2Extra && runReport.adaptive.depth2Extra > 0
+                          ? `depth2+${runReport.adaptive.depth2Extra}`
+                          : null,
+                        runReport.adaptive.paginationDetail
+                          ? `page:${runReport.adaptive.paginationDetail}`
+                          : null,
+                        runReport.adaptive.gapFillExtra && runReport.adaptive.gapFillExtra > 0
+                          ? `gap+${runReport.adaptive.gapFillExtra}`
+                          : null,
+                      ]
+                        .filter(Boolean)
                         .join(" · ")}
                     </span>
                   )}

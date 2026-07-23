@@ -258,6 +258,17 @@ export const api = {
       feedSkippedCount?: number;
       feedFailCount?: number;
       originCounts?: Record<string, number>;
+      adaptive?: {
+        softExhaustive?: boolean;
+        feedExtra?: number;
+        rssSharePct?: number;
+        originPinned?: number;
+        originPinDetail?: string;
+        expandExtra?: number;
+        depth2Extra?: number;
+        paginationDetail?: string;
+        gapFillExtra?: number;
+      };
       updatedAtMs: number;
     } | null>("get_latest_run_report", { agentId, runId: runId ?? null }),
   getHealthHistory: (agentId: string, limit?: number) =>
