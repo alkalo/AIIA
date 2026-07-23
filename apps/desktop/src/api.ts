@@ -233,6 +233,11 @@ export const api = {
     invoke<{ csvPath: string; count: number }>("export_results_as", { agentId, format }),
   openPath: (path: string) => invoke("open_path", { path }),
   openUrl: (url: string) => invoke("open_url", { url }),
+  getLatestNewsletter: (agentId: string) =>
+    invoke<{ path: string; body: string; agentId: string; updatedAtMs: number } | null>(
+      "get_latest_newsletter",
+      { agentId }
+    ),
   syncLatestRunResults: (agentId: string) =>
     invoke<number>("sync_latest_run_results", { agentId }),
   listRuns: (agentId?: string, limit?: number) =>

@@ -47,7 +47,7 @@
 - Fuera: plugins, GPT store, cloud
 
 # Epic 9: BFGN Grants & Impact News wrap — **In progress**
-- E9-S1: Newsletter text + `.eml` draft destination (`email`)
-- E9-S2: Example prompt + docs (`docs/examples/bfgn-monthly-wrap-prompt.md`, `e9-bfgn-wrap.md`)
-- E9-S3: (next) multi-lane research + freshness hard filter + optional SMTP
+- E9-S1: Copy-ready wrap text (no SMTP) + Inbox review/copy gate
+- E9-S2: Example prompt + docs
+- E9-S3: (optional later) multi-lane research lanes 1A–1D
 

@@ -1,6 +1,7 @@
 # Example prompt — BFGN monthly Grants & Impact News
 
-Paste into **Create Agent** (template Opportunities / Monitoring). Use **Gemini + Máx / ultra_high**. Destinations: Inbox + Email draft.
+Use **Gemini + Máx / ultra_high**. Destinations: **Inbox** + **Copy-ready email body**.  
+AIIA will **not** send mail — you review in Inbox and copy-paste.
 
 ```
 Monthly wrap-up for Australian purpose-led / Business for Good changemakers (BFGN-style).
@@ -13,16 +14,18 @@ For each: program_name, organization, max_funding, currency, deadline (if known)
 Prefer official portals: grants.gov.au, business.gov.au/grants, communitygrants.gov.au, FRRR, Philanthropy Australia, state programs.
 
 PART B — Business for good news (8–12 candidates → keep best ~10)
-News from roughly the last 30 days (monthly wrap) on:
+News from roughly the last 30 days on:
 social enterprise, B Corp, philanthropy, NGO sector, impact investing, ESG/CSR with sector relevance,
 First Nations economic development, major funding pools, mergers/closures, awards, partnerships.
 Prioritise Australian national; include state/global only if sector-relevant.
-Each news item: title, summary, why_it_may_matter, source, publication_date, url (https).
-Australian English only (organisation, prioritise, analyse).
-Do not invent URLs or facts.
+Each news item: title, summary, source, publication_date, url (https).
+Australian English only. Do not invent URLs or facts.
 
-Output destinations should include email draft + inbox. Schedule monthly.
+Schedule monthly. Output must be suitable for a human to copy-paste into email after review.
 ```
 
-## How to send
-After a run, open the `.eml` under `%USERPROFILE%/…/AIIA/exports/email-drafts/` (or the path in the run log) with Outlook / Mail, review, and send. Spotlights and fixed event tiles from the old BFGN template remain manual.
+## After the run
+1. Open **Inbox** → filter this agent.
+2. Read the wrap panel.
+3. Tick “I reviewed this draft”.
+4. **Copy email body** → paste into your mail client and send yourself.

@@ -13,6 +13,9 @@ import {
   postingHost,
   sanitizeFieldValue,
   getOpportunityDisplayMode,
+  composeNewsletterWrap,
+  isNewsletterWrapTarget,
+  type AgentSpec,
 } from "@aiia/agent-engine/browser";
 import { OpportunityCard } from "../components/OpportunityCard";
 import { DesktopLlmClient, prepareOllamaForPlanner } from "../ollama-desktop";
@@ -28,6 +31,11 @@ export function Inbox() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [hideDismissed, setHideDismissed] = useState(false);
+  const [wrapBody, setWrapBody] = useState<string>("");
+  const [wrapPath, setWrapPath] = useState<string>("");
+  const [wrapReviewed, setWrapReviewed] = useState(false);
+  const [wrapCopied, setWrapCopied] = useState(false);
+  const [wrapLoading, setWrapLoading] = useState(false);
 
   const lang = i18n.language.startsWith("es") ? "es" : "en";
 
@@ -45,16 +53,47 @@ export function Inbox() {
       setResults(data);
     } catch (e) {
       console.warn("Inbox list failed", e);
-      // Keep previous results if list fails; only clear when we have no prior data.
       setResults((prev) => prev);
     } finally {
       setLoading(false);
     }
   }, [filterAgent]);
 
+  const loadWrap = useCallback(async () => {
+    if (!filterAgent) {
+      setWrapBody("");
+      setWrapPath("");
+      setWrapReviewed(false);
+      setWrapCopied(false);
+      return;
+    }
+    setWrapLoading(true);
+    setWrapReviewed(false);
+    setWrapCopied(false);
+    try {
+      const draft = await api.getLatestNewsletter(filterAgent);
+      if (draft?.body) {
+        setWrapBody(draft.body);
+        setWrapPath(draft.path);
+      } else {
+        setWrapBody("");
+        setWrapPath("");
+      }
+    } catch {
+      setWrapBody("");
+      setWrapPath("");
+    } finally {
+      setWrapLoading(false);
+    }
+  }, [filterAgent]);
+
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    void loadWrap();
+  }, [loadWrap]);
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
@@ -66,13 +105,14 @@ export function Inbox() {
           .catch((e) => console.warn("Inbox sync on complete failed", e))
           .finally(() => {
             void refresh();
+            if (!filterAgent || filterAgent === agentId) void loadWrap();
           });
       } else {
         void refresh();
       }
     }).then((fn) => unsubs.push(fn));
     return () => unsubs.forEach((fn) => fn());
-  }, [refresh]);
+  }, [refresh, loadWrap, filterAgent]);
 
   const visibleResults = useMemo(() => {
     let list = results;
@@ -90,6 +130,13 @@ export function Inbox() {
     formats.push("json");
     return formats;
   }, [agents, filterAgent]);
+
+  const selectedAgent = agents.find((a) => a.id === filterAgent);
+  const showWrapPanel =
+    Boolean(filterAgent) &&
+    (Boolean(selectedAgent && isNewsletterWrapTarget(selectedAgent.spec)) ||
+      Boolean(wrapBody) ||
+      Boolean(selectedAgent?.spec.output.destinations.includes("email")));
 
   const handleDownload = async (format: "csv" | "excel" | "json") => {
     setExporting(true);
@@ -122,6 +169,8 @@ export function Inbox() {
     try {
       await api.clearResults(filterAgent || undefined);
       setResults([]);
+      setWrapBody("");
+      setWrapPath("");
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e));
     } finally {
@@ -169,7 +218,30 @@ export function Inbox() {
     }
   };
 
-  const selectedAgent = agents.find((a) => a.id === filterAgent);
+  const rebuildWrapFromResults = () => {
+    if (!selectedAgent) return;
+    const items = visibleResults.map((r) => ({ ...r.data, score: r.score ?? r.data.score }));
+    if (items.length === 0) {
+      window.alert(t("inbox.wrapEmpty"));
+      return;
+    }
+    const body = composeNewsletterWrap(items, selectedAgent.spec as AgentSpec);
+    setWrapBody(body);
+    setWrapPath("");
+    setWrapReviewed(false);
+    setWrapCopied(false);
+  };
+
+  const copyWrap = async () => {
+    if (!wrapReviewed || !wrapBody) return;
+    try {
+      await navigator.clipboard.writeText(wrapBody);
+      setWrapCopied(true);
+    } catch {
+      window.alert(t("chat.copyFailed"));
+    }
+  };
+
   const cardView = selectedAgent
     ? getOpportunityDisplayMode(selectedAgent.spec) === "card"
     : false;
@@ -233,6 +305,72 @@ export function Inbox() {
           )}
         </div>
       </div>
+
+      {showWrapPanel && (
+        <section className="inbox-wrap-panel" style={{ marginBottom: "1.25rem" }}>
+          <h3 style={{ marginBottom: "0.35rem" }}>{t("inbox.wrapTitle")}</h3>
+          <p className="hint-text">{t("inbox.wrapHint")}</p>
+          {wrapLoading ? (
+            <p>{t("common.loading")}</p>
+          ) : wrapBody ? (
+            <>
+              <textarea
+                className="input"
+                readOnly
+                value={wrapBody}
+                rows={16}
+                style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 13 }}
+              />
+              {wrapPath && (
+                <p className="hint-text spec-mono" style={{ marginTop: 4 }}>
+                  {wrapPath}
+                </p>
+              )}
+              <div className="inbox-toolbar" style={{ marginTop: 8, gap: 8 }}>
+                <label className="inbox-toggle">
+                  <input
+                    type="checkbox"
+                    checked={wrapReviewed}
+                    onChange={(e) => {
+                      setWrapReviewed(e.target.checked);
+                      setWrapCopied(false);
+                    }}
+                  />
+                  {t("inbox.wrapReviewed")}
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={!wrapReviewed}
+                  onClick={() => void copyWrap()}
+                >
+                  {wrapCopied ? t("inbox.wrapCopied") : t("inbox.wrapCopy")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  onClick={rebuildWrapFromResults}
+                >
+                  {t("inbox.wrapRebuild")}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div>
+              <p>{t("inbox.wrapEmpty")}</p>
+              {visibleResults.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  onClick={rebuildWrapFromResults}
+                >
+                  {t("inbox.wrapRebuild")}
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       {visibleResults.length === 0 ? (
         <p>{t("inbox.noResults")}</p>

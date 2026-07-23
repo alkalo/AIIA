@@ -12,7 +12,18 @@ function looksLikeGrant(item: ExtractedItem): boolean {
   return /\b(grant|funding|subvenci|convocatoria|up to \$|up to €|deadline|closing)\b/i.test(blob);
 }
 
-function grantLine(item: ExtractedItem): string {
+/** Drop news older than maxAgeDays when a parseable date exists (grants keep). */
+export function isFreshEnough(item: ExtractedItem, maxAgeDays = 35): boolean {
+  if (looksLikeGrant(item)) return true;
+  const raw = str(item.publication_date) || str(item.date) || str(item.posting_date);
+  if (!raw) return true;
+  const t = Date.parse(raw);
+  if (Number.isNaN(t)) return true;
+  const ageDays = (Date.now() - t) / (1000 * 60 * 60 * 24);
+  return ageDays <= maxAgeDays;
+}
+
+function grantBlock(item: ExtractedItem): string {
   const title = str(item.program_name) || str(item.title) || "Untitled grant";
   const funding =
     str(item.max_funding) ||
@@ -20,34 +31,22 @@ function grantLine(item: ExtractedItem): string {
     str(item.summary) ||
     str(item.reason) ||
     "Open opportunity — see link for details.";
-  const org = str(item.organization);
-  const deadline = str(item.deadline);
-  const bits = [funding];
-  if (org) bits.push(`Org: ${org}`);
-  if (deadline) bits.push(`Deadline: ${deadline}`);
   const url = str(item.url);
-  return url ? `${title}\n${bits.join(" · ")}\n${url}` : `${title}\n${bits.join(" · ")}`;
+  // BFGN monthly style: title + one funding line (+ optional URL for the human editor)
+  return url ? `${title}\n${funding}\n${url}` : `${title}\n${funding}`;
 }
 
-function newsLine(item: ExtractedItem, index: number): string {
-  const title = str(item.title) || str(item.headline) || `Item ${index + 1}`;
+function newsBullet(item: ExtractedItem): string {
+  const title = str(item.title) || str(item.headline) || "Update";
   const news =
     str(item.summary) ||
     str(item.description) ||
     str(item.the_news) ||
     str(item.reason) ||
     "";
-  const why = str(item.why_it_may_matter) || str(item.why_it_matters) || "";
-  const source = str(item.source) || str(item.organization) || "";
-  const date = str(item.publication_date) || str(item.date) || "";
   const url = str(item.url) || str(item.plain_url) || "";
-  const parts = [`${index + 1}. ${title}`];
-  if (news) parts.push(`• The News: ${news}`);
-  if (why) parts.push(`• Why it Matters: ${why}`);
-  if (source) parts.push(`• Source: ${source}`);
-  if (date) parts.push(`• Date: ${date}`);
-  if (url) parts.push(`• Link: ${url}`);
-  return parts.join("\n");
+  const line = news ? `${title} — ${news}` : title;
+  return url ? `${line}\n${url}` : line;
 }
 
 /** Detect wrap-up / newsletter style agents from prompt + destinations. */
@@ -60,58 +59,71 @@ export function isNewsletterWrapTarget(spec: AgentSpec): boolean {
 }
 
 /**
- * Compose a BFGN-style plain-text wrap (grants block + news block) for email draft / inbox.
+ * BFGN-style plain-text wrap for copy-paste into email.
+ * AIIA never sends this — human reviews and pastes.
  */
 export function composeNewsletterWrap(
   items: ExtractedItem[],
   spec: AgentSpec,
-  options?: { monthLabel?: string; maxGrants?: number; maxNews?: number }
+  options?: { monthLabel?: string; maxGrants?: number; maxNews?: number; maxAgeDays?: number }
 ): string {
   const month =
     options?.monthLabel ??
     new Date().toLocaleString("en-AU", { month: "long", year: "numeric" });
   const maxGrants = options?.maxGrants ?? 12;
   const maxNews = options?.maxNews ?? 10;
+  const maxAgeDays = options?.maxAgeDays ?? 35;
 
-  const grants = items.filter(looksLikeGrant).slice(0, maxGrants);
-  const news = items.filter((i) => !looksLikeGrant(i)).slice(0, maxNews);
-  // If everything looked like grants (pure grant agent), still emit news-less wrap.
-  const grantBlock =
+  const fresh = items.filter((i) => isFreshEnough(i, maxAgeDays));
+  const grants = fresh.filter(looksLikeGrant).slice(0, maxGrants);
+  const news = fresh.filter((i) => !looksLikeGrant(i)).slice(0, maxNews);
+
+  const grantBlockText =
     grants.length > 0
-      ? grants.map(grantLine).join("\n\n")
+      ? grants.map(grantBlock).join("\n\n")
       : isGrantTarget(spec)
-        ? items.slice(0, maxGrants).map(grantLine).join("\n\n")
-        : "(No open grant listings found this run.)";
+        ? fresh.slice(0, maxGrants).map(grantBlock).join("\n\n")
+        : "(No open grant listings found this run — add or re-run with Gemini ultra.)";
 
-  const newsSource = grants.length > 0 ? news : isGrantTarget(spec) ? [] : items.slice(0, maxNews);
-  const newsBlock =
+  const newsSource =
+    grants.length > 0 ? news : isGrantTarget(spec) ? [] : fresh.slice(0, maxNews);
+  const newsBlockText =
     newsSource.length > 0
-      ? newsSource.map((item, i) => newsLine(item, i)).join("\n\n")
-      : "(No sector news items ranked this run.)";
+      ? newsSource.map(newsBullet).join("\n\n")
+      : "(No sector news ranked this run — review sources or widen the prompt.)";
+
+  const toNote = spec.output.emailTo?.trim()
+    ? `\n(Suggested To when you paste: ${spec.output.emailTo.trim()} — AIIA does not send mail.)\n`
+    : "";
 
   return [
     `${month}`,
     spec.name,
-    "",
+    toNote,
     `Hi,`,
     "",
-    `The wrap-up is here — opportunities and news gathered for you.`,
+    `The wrap-up is here!`,
+    `Don't miss the opportunities and news we've gathered for you.`,
     "",
-    `=== Open grants & funding ===`,
+    `--- Open grants & funding ---`,
     "",
-    grantBlock,
+    grantBlockText,
     "",
-    `=== Business for good news wrap-up ===`,
+    `--- Business for good news wrap-up ---`,
     "",
-    newsBlock,
+    newsBlockText,
     "",
-    `—`,
-    `Generated by AIIA · ${new Date().toISOString().slice(0, 10)}`,
-    `Agent: ${spec.name}`,
-  ].join("\n");
+    `---`,
+    `DRAFT ONLY — review before sending. AIIA never emails automatically.`,
+    `Generated ${new Date().toISOString().slice(0, 10)} · Agent: ${spec.name}`,
+  ]
+    .filter((line, i, arr) => !(line === "" && arr[i - 1] === ""))
+    .join("\n");
 }
 
-/** Build a minimal RFC 822 .eml draft (open in Outlook / Mail). */
+/**
+ * @deprecated Kept for tests/compat. Prefer plain .txt copy-paste; AIIA does not send mail.
+ */
 export function buildEmlDraft(options: {
   subject: string;
   body: string;
@@ -121,25 +133,6 @@ export function buildEmlDraft(options: {
   const to = options.to?.trim() || "undisclosed-recipients:;";
   const from = options.from?.trim() || "AIIA <aiia@localhost>";
   const subject = options.subject.replace(/[\r\n]+/g, " ").slice(0, 180);
-  // Quoted-printable-ish plain: keep UTF-8 and encode as base64 if non-ascii heavy.
-  const needsB64 = /[^\x00-\x7F]/.test(options.body) || /[^\x00-\x7F]/.test(subject);
-  if (needsB64) {
-    const b64 = Buffer.from(options.body, "utf8").toString("base64");
-    const subjB64 = `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
-    return [
-      `From: ${from}`,
-      `To: ${to}`,
-      `Subject: ${subjB64}`,
-      `MIME-Version: 1.0`,
-      `Content-Type: text/plain; charset=UTF-8`,
-      `Content-Transfer-Encoding: base64`,
-      `Date: ${new Date().toUTCString()}`,
-      `X-Mailer: AIIA`,
-      ``,
-      b64.match(/.{1,76}/g)?.join("\r\n") ?? b64,
-      ``,
-    ].join("\r\n");
-  }
   return [
     `From: ${from}`,
     `To: ${to}`,
@@ -147,8 +140,8 @@ export function buildEmlDraft(options: {
     `MIME-Version: 1.0`,
     `Content-Type: text/plain; charset=UTF-8`,
     `Content-Transfer-Encoding: 8bit`,
-    `Date: ${new Date().toUTCString()}`,
     `X-Mailer: AIIA`,
+    `X-AIIA-Draft: copy-paste-only-do-not-auto-send`,
     ``,
     options.body.replace(/\n/g, "\r\n"),
     ``,

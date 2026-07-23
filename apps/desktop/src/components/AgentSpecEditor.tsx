@@ -382,6 +382,7 @@ export function AgentSpecEditor({ spec, onChange, readOnly = false }: Props) {
             ) : (
               <p className="spec-value spec-mono">{safeOutput.emailTo || "—"}</p>
             )}
+            <p className="hint-text">{t("spec.emailHint")}</p>
           </div>
         )}
         <div className="spec-field spec-field-inline">

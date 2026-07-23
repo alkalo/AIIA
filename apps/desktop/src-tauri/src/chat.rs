@@ -685,6 +685,7 @@ pub fn draft_agent_from_prompt(name: &str, prompt: &str) -> AgentSpec {
             excel_path: None,
             excel_mode: ExcelMode::UpdateSame,
             notify: true,
+            email_to: None,
         },
         schedule: ScheduleConfig {
             interval_minutes: 1440,

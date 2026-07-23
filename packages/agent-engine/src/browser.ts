@@ -30,3 +30,8 @@ export {
   isRealEstateTarget,
   isOpportunityCardView,
 } from "./opportunity-subtype.js";
+export {
+  composeNewsletterWrap,
+  isNewsletterWrapTarget,
+  isFreshEnough,
+} from "./newsletter.js";

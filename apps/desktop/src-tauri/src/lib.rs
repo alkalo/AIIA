@@ -2800,6 +2800,55 @@ fn open_url(app: AppHandle, url: String) -> Result<(), String> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct NewsletterDraftDto {
+    path: String,
+    body: String,
+    agent_id: String,
+    updated_at_ms: u64,
+}
+
+/// Latest copy-paste wrap text for an agent (never sent by AIIA).
+#[tauri::command]
+fn get_latest_newsletter(
+    state: State<'_, AppState>,
+    agent_id: String,
+) -> Result<Option<NewsletterDraftDto>, String> {
+    let dir = state.data_dir.join("exports").join("newsletters");
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let prefix = format!("{agent_id}-");
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !name.starts_with(&prefix) || !name.ends_with(".txt") {
+            continue;
+        }
+        let meta = entry.metadata().map_err(|e| e.to_string())?;
+        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+            best = Some((modified, path));
+        }
+    }
+    let Some((modified, path)) = best else {
+        return Ok(None);
+    };
+    let body = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let updated_at_ms = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Ok(Some(NewsletterDraftDto {
+        path: path.to_string_lossy().to_string(),
+        body,
+        agent_id,
+        updated_at_ms,
+    }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RunProgressDto {
     phase: String,
     percent: u32,
@@ -3007,6 +3056,7 @@ pub fn run() {
             export_results_as,
             open_path,
             open_url,
+            get_latest_newsletter,
             sync_latest_run_results,
             list_runs,
             cancel_run,

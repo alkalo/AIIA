@@ -1,37 +1,27 @@
 # E9 — BFGN-style Grants & Impact News wrap
 
 ## Goal
-Reproduce (as far as AIIA can locally) the monthly BFGN email: open grants + business-for-good news, delivered as a wrap the user can send.
+Monthly grants + impact news wrap for **copy-paste** into any email client.  
+**AIIA never sends email** (no Gmail/SMTP). Human review is required before copy.
 
-## Reference
-User PDFs (Gmail monthly wrap-ups + Workspace Studio Gemini prompts): multi-step research (grants/policy, social enterprise, NGO/philanthropy, ESG) → editor → email.
+## Flow
+1. Agent runs (prefer **Gemini + ultra_high**).
+2. Results land in Inbox; a plain-text wrap is written under `exports/newsletters/`.
+3. In **Inbox**, select the agent → review the wrap panel.
+4. Tick **I reviewed this draft** → **Copy email body** → paste into Gmail/Outlook yourself.
 
-## What AIIA can do today (v0.1.22+)
-| Piece | Status |
-|-------|--------|
-| Discover AU grants (portals + SERP) | Strong with Gemini ultra; usable local ultra |
-| Sector news candidates | Good with Gemini; weaker local small models |
-| Curate top ~10 editorial English (AU) | **Gemini Pro preferred** |
-| Schedule monthly (`intervalMinutes: 43200`) | Yes |
-| Inbox / Excel / CSV | Yes |
-| Newsletter text + **`.eml` draft** | Yes (`output.destinations: ["email"]`) |
-| Auto-send via Gmail/SMTP | **Not yet** (open `.eml` in Outlook / copy-paste) |
-| Member/partner spotlights + fixed event cards | Manual / out of scope (editorial BFGN content) |
+## Destinations
+| Destination | Meaning |
+|-------------|---------|
+| `email` | Produce copy-ready wrap text (not a send) |
+| `inbox` / `excel` / `csv` | As usual |
 
-## Recommended setup
-1. Provider: **Gemini** (API key in Settings).
-2. Effort: **ultra_high**.
-3. Destinations: `inbox` + `email` (+ excel optional).
-4. `emailTo`: your team address (optional; fills To: in the draft).
-5. Schedule: monthly, timezone `Australia/Brisbane`.
-6. Prompt: see `docs/examples/bfgn-monthly-wrap-prompt.md`.
+Optional `emailTo` is only a **suggested To** note inside the draft — never used to send.
 
-## Local vs Gemini
-- **Local**: OK for grant link harvesting on strong HW (14b+); news curation and AU editorial quality degrade on 7b/3b.
-- **Gemini**: Better for the Workspace Studio–style multi-angle research + editor voice. Prefer Gemini for this agent.
+## Out of scope (manual)
+- Member/partner spotlights
+- Fixed BFGN event calendar tiles
+- HTML template / branding
 
-## Next (if needed)
-- Multi-lane parallel research (1A–1D) inside one run
-- Freshness hard filter (7 / 30 days)
-- HTML email body
-- Optional SMTP send with local credentials (DPAPI)
+## Docs
+- Example prompt: `docs/examples/bfgn-monthly-wrap-prompt.md`

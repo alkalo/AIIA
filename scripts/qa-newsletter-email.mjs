@@ -1,14 +1,12 @@
 /**
- * QA: newsletter wrap + .eml draft export
+ * QA: newsletter wrap (copy-paste only — no auto-send)
  * Run: node scripts/qa-newsletter-email.mjs
  */
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, dirname } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const engineRoot = join(__dirname, "../packages/agent-engine/dist");
@@ -52,36 +50,37 @@ const items = [
     summary: "Up to $8 million over four years announced.",
     why_it_may_matter: "Supports female founders in VC.",
     source: "Minderoo Foundation",
-    publication_date: "2026-06-20",
+    publication_date: new Date().toISOString().slice(0, 10),
     url: "https://example.org/news",
     score: 75,
   },
+  {
+    title: "Old news should drop",
+    summary: "Stale",
+    publication_date: "2020-01-01",
+    url: "https://example.org/old",
+    score: 40,
+  },
 ];
+
+assert.equal(news.isFreshEnough(items[2], 35), false);
 
 const body = news.composeNewsletterWrap(items, spec, { monthLabel: "July 2026" });
 assert.match(body, /FRRR Strengthening Rural Communities/);
 assert.match(body, /Minderoo invests in Startmate/);
-assert.match(body, /Open grants/);
-assert.match(body, /Business for good news/);
-
-const eml = news.buildEmlDraft({
-  subject: "July wrap-up: Grants & impact news",
-  body,
-  to: "team@bfgn.example",
-});
-assert.match(eml, /To: team@bfgn.example/);
-assert.match(eml, /Subject:/);
-assert.match(eml, /Content-Type: text\/plain/);
+assert.doesNotMatch(body, /Old news should drop/);
+assert.match(body, /DRAFT ONLY/);
+assert.match(body, /never emails automatically/i);
+assert.match(body, /Suggested To when you paste/);
 
 const dir = await mkdtemp(join(tmpdir(), "aiia-news-"));
 try {
   const paths = await exp.exportResults(items, spec, dir, "run-test");
   assert.ok(paths.newsletterPath);
-  assert.ok(paths.emailPath);
-  const emlDisk = await readFile(paths.emailPath, "utf8");
-  assert.match(emlDisk, /team@bfgn.example/);
+  assert.equal(paths.emailPath, undefined);
   const txt = await readFile(paths.newsletterPath, "utf8");
   assert.match(txt, /FRRR/);
+  assert.match(txt, /DRAFT ONLY/);
 } finally {
   await rm(dir, { recursive: true, force: true });
 }
