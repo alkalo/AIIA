@@ -24,3 +24,7 @@ Run published agents on a schedule **without the PC on**, when the LLM is **Gemi
 - Hosting Ollama in the cloud
 - Syncing chat history or full DB to cloud
 - Managed SaaS hosting by AIIA (self-host for now)
+- Storing a global Gemini key on Render (each user keeps their key in desktop Settings; Push sends it)
+
+## Status
+Shipped in v0.1.23+; per-user key via Push clarified in v0.1.25.

@@ -1,5 +1,5 @@
 import type { AgentSpec } from "./types.js";
-import { isGrantTarget } from "./opportunity-subtype.js";
+import { isGrantTarget, isCurationOpportunityTarget } from "./opportunity-subtype.js";
 
 const STOP_WORDS = new Set([
   "de", "la", "el", "en", "un", "una", "del", "los", "las", "por", "con", "para",
@@ -219,7 +219,7 @@ export interface GrantPortalSeed {
  * Uses stable https portals (not fragile planner-invented URLs).
  */
 export function grantPortalDeepLinkSeeds(spec: AgentSpec): GrantPortalSeed[] {
-  if (!isGrantTarget(spec)) return [];
+  if (!isGrantTarget(spec) && !isCurationOpportunityTarget(spec)) return [];
   const blob = `${spec.prompt} ${spec.filters.criteria}`;
   const au = /australia|australian|au\b/i.test(blob);
   const nz = /new zealand|nz\b/i.test(blob);
@@ -229,27 +229,27 @@ export function grantPortalDeepLinkSeeds(spec: AgentSpec): GrantPortalSeed[] {
   const seeds: GrantPortalSeed[] = [
     {
       title: "Funds for NGOs — grants",
-      url: "https://www2.fundsforngos.org/",
+      url: "https://www2.fundsforngos.org/category/latest-funds-for-ngos/",
       snippet: "Portal seed: global NGO / community grant listings.",
     },
     {
-      title: "GlobalGiving",
-      url: "https://www.globalgiving.org/",
-      snippet: "Portal seed: GlobalGiving.",
+      title: "GlobalGiving — projects",
+      url: "https://www.globalgiving.org/search/",
+      snippet: "Portal seed: GlobalGiving search listings.",
     },
   ];
 
   if (au || (!au && !nz && !es)) {
     seeds.unshift(
       {
-        title: "Community Grants Hub (AU)",
-        url: "https://www.communitygrants.gov.au/",
-        snippet: "Portal seed: Australian Community Grants Hub.",
+        title: "GrantConnect — open grant list",
+        url: "https://www.grants.gov.au/Go/List",
+        snippet: "Portal seed: Australian Government open grant listings (deep list).",
       },
       {
-        title: "GrantConnect / grants.gov.au",
-        url: "https://www.grants.gov.au/",
-        snippet: "Portal seed: Australian Government grants.",
+        title: "Community Grants Hub (AU)",
+        url: "https://www.communitygrants.gov.au/grants",
+        snippet: "Portal seed: Australian Community Grants Hub listings.",
       },
       {
         title: "business.gov.au — Grants and programs",
@@ -257,17 +257,17 @@ export function grantPortalDeepLinkSeeds(spec: AgentSpec): GrantPortalSeed[] {
         snippet: "Portal seed: Australian business / community grant programs.",
       },
       {
-        title: "FRRR — Foundation for Rural & Regional Renewal",
-        url: "https://frrr.org.au/",
-        snippet: "Portal seed: FRRR community funding.",
+        title: "FRRR — funding programs",
+        url: "https://frrr.org.au/funding/",
+        snippet: "Portal seed: FRRR community funding programs.",
       },
       {
-        title: "Philanthropy Australia",
-        url: "https://www.philanthropy.org.au/",
-        snippet: "Portal seed: Philanthropy Australia.",
+        title: "Philanthropy Australia — funding",
+        url: "https://www.philanthropy.org.au/seek-funding/",
+        snippet: "Portal seed: Philanthropy Australia funding directory.",
       },
       {
-        title: "Grantly (AU)",
+        title: "Grantly (AU) — open grants",
         url: "https://www.grantly.au/",
         snippet: "Portal seed: Grantly community grant portal.",
       }

@@ -8,9 +8,9 @@ Docs: [`docs/architecture-cloud-cron.md`](../../docs/architecture-cloud-cron.md)
 
 1. Blueprint del repo → servicio `aiia-cloud`.
 2. Copia `AIIA_CLOUD_TOKEN` del dashboard de Render.
-3. En AIIA Ajustes: URL `https://aiia-cloud.onrender.com` + token.
+3. En AIIA Ajustes: URL cloud + token + **tu** API key de Gemini (cada usuario la suya).
 4. Ping `/health` cada 10 min (keep-alive free).
-5. Agente con cloud + Push from Dashboard.
+5. Agente con cloud + Push from Dashboard (el Push envía la key del usuario; no se configura en Render).
 
 ## Local
 

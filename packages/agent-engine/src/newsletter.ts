@@ -1,5 +1,5 @@
 import type { AgentSpec, ExtractedItem } from "./types.js";
-import { isGrantTarget } from "./opportunity-subtype.js";
+import { isGrantTarget, resolveContentMode } from "./opportunity-subtype.js";
 
 function str(v: unknown): string {
   return String(v ?? "").trim();
@@ -52,13 +52,26 @@ function newsBullet(item: ExtractedItem): string {
   return url ? `${line}\n${url}` : line;
 }
 
-/** Detect wrap-up / newsletter style agents from prompt + destinations. */
+/**
+ * Detect wrap-up / newsletter style agents.
+ * Must NOT fire on pure opportunity curators (even if prompt mentions impact / BFGN).
+ */
 export function isNewsletterWrapTarget(spec: AgentSpec): boolean {
-  if (spec.output.destinations.includes("email")) return true;
+  if (spec.contentMode === "wrap") return true;
+  if (spec.contentMode === "opportunities" || spec.contentMode === "sector_news") return false;
+
+  const mode = resolveContentMode(spec);
   const blob = `${spec.prompt} ${spec.name} ${spec.filters.criteria}`.toLowerCase();
-  return /\b(wrap-?up|newsletter|bolet[ií]n|changemaker|impact news|business for good|bfgn)\b/i.test(
-    blob
-  );
+  const explicitWrap = /\b(wrap-?up|newsletter|bolet[ií]n)\b/i.test(blob);
+
+  // Opportunity / sector-news discovery is never wrap unless language is explicit.
+  if ((mode === "opportunities" || mode === "sector_news") && !explicitWrap) return false;
+
+  // Brand names alone (bfgn, changemaker) used to false-trigger wrap lanes.
+  if (!explicitWrap) return false;
+
+  // Email destination alone is not enough — needs wrap language above.
+  return true;
 }
 
 /**

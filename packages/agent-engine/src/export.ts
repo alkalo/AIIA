@@ -36,8 +36,7 @@ export async function exportResults(
       : ["title", "url", "snippet", "score", "reason"];
 
   const stamp = runId ?? new Date().toISOString().replace(/[:.]/g, "-");
-  const wantWrap =
-    destinations.includes("email") || isNewsletterWrapTarget(spec);
+  const wantWrap = isNewsletterWrapTarget(spec);
 
   let wrapBody: string | undefined;
   if (wantWrap && items.length > 0) {

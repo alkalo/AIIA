@@ -44,7 +44,7 @@ const ALL_ENGINES: SearchEngineId[] = [
 
 /** Cross-query engine health: skip rate-limited/captcha engines for a cooldown window. */
 const ENGINE_FAIL_THRESHOLD = 2;
-const ENGINE_COOLDOWN_MS = 90_000;
+export const ENGINE_COOLDOWN_MS = 90_000;
 type EngineHealth = { fails: number; cooldownUntil: number; successes: number };
 const engineHealth = new Map<SearchEngineId, EngineHealth>();
 
@@ -85,6 +85,18 @@ export function isHardBlockSearchError(message: string): boolean {
 /** Test helper / run reset. */
 export function resetSearchEngineHealth(): void {
   engineHealth.clear();
+}
+
+/** Ms until the given engines leave cooldown (0 if all ready). */
+export function msUntilEnginesReady(engines?: SearchEngineId[]): number {
+  const ids = engines?.length ? engines : (Object.keys(ENGINES) as SearchEngineId[]);
+  let max = 0;
+  const now = Date.now();
+  for (const id of ids) {
+    const left = healthOf(id).cooldownUntil - now;
+    if (left > max) max = left;
+  }
+  return Math.max(0, max);
 }
 // ---------------------------------------------------------------------------
 // Browser (solo se usa para leer páginas, no para buscar).

@@ -5,6 +5,9 @@
 # Deploy: Render Dashboard → New → Blueprint → this repo
 # Then copy AIIA_CLOUD_TOKEN from the aiia-cloud env vars into AIIA → Settings.
 #
+# Gemini API keys are NOT stored on Render. Each user saves their key in the
+# desktop app (Settings); Push to Cloud sends it with the agent over HTTPS.
+#
 # Free limits: spins down after 15 min idle (no persistent disk).
 # Keep awake: ping GET /health every ~10 min (cron-job.org / UptimeRobot).
 # After redeploy/restart: Push agents again from Dashboard.
@@ -32,6 +35,8 @@ services:
         value: "22"
       - key: AIIA_CLOUD_TOKEN
         generateValue: true
+      - key: AIIA_LLM_PROVIDER
+        value: "gemini"
       - key: AIIA_CLOUD_DATA_DIR
         value: /opt/render/project/src/cloud-data
       - key: AIIA_RUNNER_JS

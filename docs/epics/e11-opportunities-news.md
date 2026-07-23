@@ -14,6 +14,14 @@ Human review in Inbox (Approve / Reject / Archive). Newsletter wrap remains a se
 - `packages/agent-engine/src/curation.ts` — verify, freshness, exclude, fingerprint, editorial boost
 - News seeds: `news-sources.ts`; opp lanes: `opportunity-lanes.ts`
 - Filters: `maxAgeDays`, `minDaysRemaining`, `requireVerification`
+- Wrap detection requires explicit wrap/newsletter language (not brand names / opportunity curators)
+- SERP blocked: wait full engine cooldown (~90s) + one retry, then stop empty waves
+- Page fetch appends real `<a href>` markup (`__AIIA_ANCHORS__`) so listing expand works (innerText alone cannot)
+- Listing expand: `listing-expand.ts` harvests `/Go/Show` etc.; deep-links are extracted first
+- Score floor re-applied after critic; opportunity extract prompt for all curation subtypes
+- Portal seeds for all opportunity curators (not grants-only)
+- Coverage provenance preserved through extract → validate → curation; post-curation portal rescue if wiped
+- `tauri:dev` / `predev.ps1` runs `build:packages` so runner always loads fresh `dist/`
 
 ## UI
 - Inbox review queue filters (pending / approved / rejected / archived)

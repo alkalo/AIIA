@@ -7,6 +7,7 @@ import {
   isCurationOpportunityTarget,
 } from "./opportunity-subtype.js";
 import { isExpiredDeadline } from "./deadline.js";
+import { hasCoverageProvenance } from "./coverage-markers.js";
 
 const JOB_POSTING_URL_PATTERNS = [
   /\/jobs?\//i,
@@ -96,10 +97,13 @@ const DIRECT_GRANT_URL_PATTERNS = [
   /grantid=/i,
   /opportunityid=/i,
   /gouuid=/i,
+  /foid=/i,
   /\/go\/show/i,
   /\/viewgrant/i,
   /\/grant-details/i,
   /\/funding-opportunity/i,
+  /\/fellowship/i,
+  /\/seek-funding/i,
 ];
 
 const LOW_QUALITY_GRANT_URL_PATTERNS = [
@@ -265,7 +269,18 @@ export function validateOpportunityResult(item: ExtractedItem, spec: AgentSpec):
     const url = resolveOpportunityUrl(normalized as Record<string, unknown>);
     if (!program && !org) return false;
     if (!url && !program) return false;
-    if (url && isLowQualityGrantUrl(url) && !isDirectGrantUrl(url) && isGrantTarget(spec)) {
+    const portalish = hasCoverageProvenance(
+      normalized.reason,
+      normalized.summary,
+      normalized.description
+    );
+    if (
+      url &&
+      isLowQualityGrantUrl(url) &&
+      !isDirectGrantUrl(url) &&
+      (isGrantTarget(spec) || isCurationOpportunityTarget(spec)) &&
+      !portalish
+    ) {
       return false;
     }
     if (isExpiredDeadline(normalized.deadline ?? normalized.closing_date)) return false;
@@ -285,8 +300,8 @@ export function validateOpportunityResult(item: ExtractedItem, spec: AgentSpec):
     const rolling = /\b(rolling|ongoing|open now)\b/i.test(
       `${normalized.status ?? ""} ${normalized.description ?? ""} ${normalized.summary ?? ""}`
     );
-    // Require a concrete signal: deadline, funding/benefit, deep call URL, or rolling.
-    if (!deadline && !funding && !deep && !rolling) return false;
+    // Require a concrete signal: deadline, funding/benefit, deep call URL, rolling, or coverage seed.
+    if (!deadline && !funding && !deep && !rolling && !portalish) return false;
     return true;
   }
 

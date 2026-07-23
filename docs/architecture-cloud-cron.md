@@ -31,24 +31,35 @@ Plan Starter+ con **persistent disk** montado en `/var/data` y `AIIA_CLOUD_DATA_
 | Var | Uso |
 |-----|-----|
 | `AIIA_CLOUD_TOKEN` | Secreto compartido con la app (Render lo genera) |
+| `AIIA_LLM_PROVIDER` | Fijo `gemini` en cloud |
 | `AIIA_CLOUD_DATA_DIR` | Carpeta de agents/runs/inbox |
 | `AIIA_RUNNER_JS` | Path a `packages/agent-runner/dist/index.js` |
 | `PORT` | Lo pone Render automáticamente |
 | `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` | `1` en free |
+| `AIIA_GEMINI_API_KEY` | **No usar en producto.** Solo fallback self-host; la key la pone cada usuario en el desktop y viaja en el Push |
 
 Build local / CI: `npm run cloud:build` luego `npm run cloud:start`.
 
 ## Cómo usar un agente en cloud
-1. Provider = **Gemini** + API key (Google AI Studio; no hace falta GCP Console).
-2. En el agente: marcar **Ejecutar en AIIA Cloud (Gemini)**.
-3. Publicar → en Dashboard **Push to Cloud**.
-4. El PC puede apagarse; el worker corre due cada minuto (mientras esté despierto).
-5. Al abrir la app (o Sync now) ves resultados en Inbox.
+1. En AIIA Desktop → **Ajustes**: API key de Gemini ([Google AI Studio](https://aistudio.google.com/apikey)) + URL cloud + token.
+2. Provider = **Gemini**.
+3. En el agente: marcar **Ejecutar en AIIA Cloud (Gemini)**.
+4. Publicar → Dashboard **Push to Cloud** (sube el AgentSpec + la key del usuario por HTTPS).
+5. El PC puede apagarse; el worker corre due cada minuto (mientras esté despierto).
+6. Al abrir la app (o Sync now) ves resultados en Inbox.
+
+## Qué NO es el cloud free
+- **No** es la app Tauri completa en el navegador (Chat UI + agentes en un sitio web).
+- **Sí** es el mismo motor de agentes Gemini (cron) con PC apagado.
+- Ollama **nunca** corre en Render.
+- **No** se guarda una Gemini key global en Render para todos los usuarios.
 
 ## Seguridad
-- La API key de Gemini se envía al cloud al hacer Push (HTTPS + bearer).
+- Cada usuario guarda su key en el desktop (DPAPI) y el Push la envía cifrada en tránsito (HTTPS + bearer).
+- En el worker queda asociada al agente (`meta.geminiApiKey`); no va al repo ni al Blueprint.
 - Render ya da HTTPS en `*.onrender.com`.
 - Ollama **nunca** se ejecuta en cloud.
 
 ## Estado
 - v0.1.23+: código desktop + worker + Blueprint free incluidos.
+- v0.1.25: key Gemini por usuario (Push), no env global en Render.

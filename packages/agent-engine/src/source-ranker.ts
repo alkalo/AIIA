@@ -3,7 +3,7 @@ import { defaultLlmTimeoutMs } from "@aiia/ollama-client";
 import type { AgentSpec, SearchResult } from "./types.js";
 import { rankSearchResults, type SearchHit } from "./search-quality.js";
 import { coerceJsonArray } from "./json-utils.js";
-import { isGrantTarget, isRealEstateTarget } from "./opportunity-subtype.js";
+import { isGrantTarget, isCurationOpportunityTarget, isRealEstateTarget } from "./opportunity-subtype.js";
 import { isDirectGrantUrl, isLowQualityGrantUrl } from "./result-quality.js";
 import { isBarePortalHomepage, isRelevantRealEstateHit } from "./real-estate-sources.js";
 
@@ -44,7 +44,7 @@ export async function rankSources(
       const isPortalSeed = /portal seed/i.test(r.snippet ?? "");
       const fetchSeed = isFetchablePortalSeed(r, profile);
       const lowGrant =
-        isGrantTarget(spec) &&
+        (isGrantTarget(spec) || isCurationOpportunityTarget(spec)) &&
         isLowQualityGrantUrl(r.url) &&
         !isDirectGrantUrl(r.url) &&
         !isPortalSeed;

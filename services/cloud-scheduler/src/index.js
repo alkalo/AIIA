@@ -5,13 +5,14 @@
  *   PORT                 — HTTP port (default 8787)
  *   AIIA_CLOUD_TOKEN     — shared bearer token (desktop Settings)
  *   AIIA_CLOUD_DATA_DIR  — persistent data dir (agents, runs, keys)
- *   AIIA_GEMINI_API_KEY  — optional global key; per-agent key preferred
+ *   AIIA_GEMINI_API_KEY  — optional self-host fallback only; product path = key per user via Push
+ *   AIIA_LLM_PROVIDER    — "gemini" on this worker
  *   AIIA_RUNNER_JS       — path to agent-runner dist/index.js
  *
  * Desktop flow:
- *   1. Settings → Cloud URL + token
+ *   1. Settings → Cloud URL + token + user's Gemini API key (local)
  *   2. Agent schedule.cloudEnabled = true (Gemini provider)
- *   3. App pushes agent on publish / sync_cloud_agent
+ *   3. App pushes agent + geminiApiKey on publish / sync_cloud_agent
  *   4. This service runs due agents every minute
  *   5. App pull_cloud_runs on open → local inbox
  */
@@ -120,7 +121,8 @@ async function tick() {
   try {
     const due = await listDueAgents();
     for (const { spec, meta } of due) {
-      const key = meta.geminiApiKey || "";
+      // Per-user key from desktop Push (meta); optional env only for self-host ops.
+      const key = meta.geminiApiKey || process.env.AIIA_GEMINI_API_KEY || "";
       try {
         console.log(`[cloud] running ${spec.id}`);
         await runAgent(spec, key);

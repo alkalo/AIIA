@@ -1,6 +1,6 @@
 [package]
 name = "aiia-desktop"
-version = "0.1.24"
+version = "0.1.25"
 description = "AIIA - Local AI chat and search agents"
 authors = ["AIIA"]
 edition = "2021"

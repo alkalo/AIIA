@@ -17,6 +17,7 @@ import {
   resolveOpportunityUrl,
   sanitizeFieldValue,
 } from "./result-quality.js";
+import { hasCoverageProvenance } from "./coverage-markers.js";
 
 export type ItemKind = "opportunity" | "news" | "other";
 export type OpportunityCategory =
@@ -236,10 +237,17 @@ export function shouldExcludeOpportunity(
   const b = blobOf(item);
 
   if (!url || !/^https?:\/\//i.test(url)) return "missing_official_url";
+  const hasConcreteFields =
+    Boolean(str(item.program_name) || str(item.title)) &&
+    Boolean(str(item.organization) || str(item.max_funding) || str(item.value_or_benefit) || str(item.eligibility));
+  const coverage = hasCoverageProvenance(b, item.reason, item.summary, item.description);
+
   if (url && isLowQualityGrantUrl(url) && !isDirectGrantUrl(url)) {
-    // Programs/awards/exposure may live on org pages — only hard-fail funding-style grant URLs
-    const cat = classifyOpportunityCategory(item, spec);
-    if (cat === "funding") return "weak_official_url";
+    // Intentional portal / listing seeds must survive SERP-dead runs.
+    if (!coverage) {
+      const cat = classifyOpportunityCategory(item, spec);
+      if (cat === "funding" && !hasConcreteFields) return "weak_official_url";
+    }
   }
 
   if (EXCLUDE_BLOB.test(b)) return "invitation_or_waitlist";
@@ -255,11 +263,15 @@ export function shouldExcludeOpportunity(
   const days = daysUntilDeadline(deadline, now);
   if (days != null && days < minDays) return "closing_too_soon";
 
-  // Undated non-rolling opportunities: soft exclude only when requireVerification
+  // Undated non-rolling: keep concrete official opportunities + coverage seeds as pending.
   const rolling =
     /\b(rolling|ongoing|open now|no deadline)\b/i.test(b) ||
     /^rolling$/i.test(str(item.status));
   if (spec.filters?.requireVerification && !deadline && !rolling && !parseDeadline(deadline)) {
+    if (coverage) return null;
+    if (isDirectGrantUrl(url)) return null;
+    if (hasConcreteFields && !isLowQualityGrantUrl(url)) return null;
+    if (hasConcreteFields) return null;
     return "unclear_deadline";
   }
 

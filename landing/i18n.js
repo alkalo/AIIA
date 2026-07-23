@@ -9,7 +9,7 @@ const strings = {
     "hero.subtitle":
       "AIIA Chat is your free local assistant. Need recurring research? Turn a conversation into a search agent that runs on a schedule — inbox, Excel, or CSV, all on your PC.",
     "hero.download": "Download",
-    "hero.note": "Free · 100% local · No cloud · No paid APIs",
+    "hero.note": "Free · Local-first · Optional Gemini cloud cron · No paid SaaS",
     "how.title": "How it works",
     "how.subtitle": "From idea to automated results in five steps",
     "how.step1.title": "Describe your goal",
@@ -110,7 +110,7 @@ const strings = {
     "hero.subtitle":
       "AIIA Chat es tu asistente local gratis. ¿Investigación recurrente? Convierte una conversación en un agente de búsqueda programado — bandeja, Excel o CSV, todo en tu PC.",
     "hero.download": "Descargar",
-    "hero.note": "Gratis · 100% local · Sin nube · Sin APIs de pago",
+    "hero.note": "Gratis · Local-first · Cron Gemini cloud opcional · Sin SaaS de pago",
     "how.title": "Cómo funciona",
     "how.subtitle": "De la idea a resultados automáticos en cinco pasos",
     "how.step1.title": "Describe tu objetivo",

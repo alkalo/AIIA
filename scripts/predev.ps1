@@ -18,6 +18,10 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--disable-gpu --disable-features=R
 $Root = Split-Path $PSScriptRoot -Parent
 Set-Location $Root
 
+Write-Host "Compilando packages (scraper, agent-engine, runners)..."
+npm run build:packages
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Host "Compilando frontend..."
 npm run build -w @aiia/desktop
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

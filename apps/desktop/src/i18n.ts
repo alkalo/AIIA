@@ -371,7 +371,7 @@ const resources = {
         geminiKeyMissing: "No API key saved — Gemini mode unavailable",
         cloudTitle: "AIIA Cloud (Gemini cron)",
         cloudHint:
-          "Run scheduled Gemini agents while your PC is off. Deploy aiia-cloud on Render (Blueprint), paste URL + token. Free: ping /health every 10 min. Local Ollama still needs this PC on.",
+          "Run scheduled Gemini agents while your PC is off. Deploy aiia-cloud on Render (Blueprint), paste URL + token here. Each user keeps their own Gemini key in Settings (sent on Push — not stored as a Render env). Free: ping /health every 10 min. Local Ollama still needs this PC on.",
         cloudUrl: "Cloud base URL",
         cloudToken: "Cloud bearer token",
         cloudSave: "Save cloud config",
@@ -865,7 +865,7 @@ const resources = {
         geminiKeyMissing: "Sin API key — el modo Gemini no está disponible",
         cloudTitle: "AIIA Cloud (cron Gemini)",
         cloudHint:
-          "Ejecuta agentes Gemini programados con el PC apagado. Despliega aiia-cloud en Render (Blueprint) y pega URL + token. Free: ping a /health cada 10 min. Ollama local sigue necesitando el PC encendido.",
+          "Ejecuta agentes Gemini programados con el PC apagado. Despliega aiia-cloud en Render (Blueprint) y pega aquí URL + token. Cada usuario guarda su propia API key de Gemini en Ajustes (se envía en el Push; no va como env de Render). Free: ping a /health cada 10 min. Ollama local sigue necesitando el PC encendido.",
         cloudUrl: "URL base Cloud",
         cloudToken: "Token bearer Cloud",
         cloudSave: "Guardar config cloud",

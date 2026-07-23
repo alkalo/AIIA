@@ -8,6 +8,9 @@ import {
   enginesForEffort,
   isHardBlockSearchError,
   resetSearchEngineHealth,
+  msUntilEnginesReady,
+  ENGINE_COOLDOWN_MS,
+  stripLinkMarkup,
   type ScraperOptions,
   type SearchEngineId,
 } from "@aiia/scraper";
@@ -58,17 +61,18 @@ function sliceContentForExtract(
   _url: string,
   spec: AgentSpec
 ): string {
-  if (content.length <= maxChars) return content;
-  if (!isRealEstateTarget(spec) && !isGrantTarget(spec)) {
-    return content.slice(0, maxChars);
+  const cleaned = stripLinkMarkup(content);
+  if (cleaned.length <= maxChars) return cleaned;
+  if (!isRealEstateTarget(spec) && !isGrantTarget(spec) && !isCurationOpportunityTarget(spec)) {
+    return cleaned.slice(0, maxChars);
   }
   const markers =
-    /€|euros?|precio|m²|m2|habitaciones?|deadline|convocatoria|funding|subvenci/i;
-  const idx = content.search(markers);
-  if (idx < 0) return content.slice(0, maxChars);
+    /€|euros?|precio|m²|m2|habitaciones?|deadline|convocatoria|funding|subvenci|grant|fellowship|award/i;
+  const idx = cleaned.search(markers);
+  if (idx < 0) return cleaned.slice(0, maxChars);
   const half = Math.floor(maxChars / 2);
   const start = Math.max(0, idx - half);
-  return content.slice(start, start + maxChars);
+  return cleaned.slice(start, start + maxChars);
 }
 import {
   normalizeExtractedItem,
@@ -84,6 +88,11 @@ import { flattenWrapLaneQueries } from "./wrap-lanes.js";
 import { sectorNewsQueryPack, sectorNewsPortalSeeds } from "./news-sources.js";
 import { opportunityDiscoveryQueries } from "./opportunity-lanes.js";
 import { applyCurationPipeline, collectKnownFingerprints } from "./curation.js";
+import {
+  extractOpportunityDeepLinks,
+  isExpandableListingPage,
+} from "./listing-expand.js";
+import { hasCoverageProvenance } from "./coverage-markers.js";
 import { readdir } from "node:fs/promises";
 import {
   realEstateExpansionQueries,
@@ -209,20 +218,61 @@ function shouldStopForEmptyWaves(
   serpExhausted = false,
   emptySerpWaves = 0
 ): boolean {
-  // SERP blocked: stop hammering queries ONLY when we have zero coverage.
-  // With portal seeds / prior hits, end SERP waves but allow the loop to exit
-  // via emptyWaves — caller still proceeds to fetch/extract.
-  if (serpExhausted && rankedCount === 0) return true;
-  if (serpExhausted && rankedCount > 0) {
-    // Soft exit after a couple of empty SERP waves once seeds exist.
-    return emptySerpWaves >= (longMode ? 4 : 2);
-  }
+  // SERP blocked → stop immediately. Burning more waves while engines cool
+  // finishes in milliseconds and looks like a "fast Max" with empty coverage.
+  if (serpExhausted) return true;
   // Soft-dead SERP: allow more empty waves when we already have seeded coverage.
   const softDeadThreshold = rankedCount > 0 ? (longMode ? 8 : 3) : longMode ? 5 : 2;
   if (emptySerpWaves >= softDeadThreshold) return true;
   const threshold = rankedCount > 0 ? (longMode ? 10 : 3) : longMode ? 6 : 2;
   if (emptyWaves < threshold) return false;
   return true;
+}
+
+const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Keep concrete opportunities that multipass wrongly scored near zero. */
+function applyOpportunityScoreFloor(items: ExtractedItem[], spec: AgentSpec): ExtractedItem[] {
+  if (!isGrantTarget(spec) && !isCurationOpportunityTarget(spec)) return items;
+  return items.map((item) => {
+    const program = String(item.program_name ?? item.title ?? "").trim();
+    const org = String(item.organization ?? "").trim();
+    const url = String(item.url ?? "").trim();
+    const coverage = hasCoverageProvenance(
+      item.reason,
+      item.summary,
+      item.description,
+      item.snippet
+    );
+    const rich =
+      Boolean(program) &&
+      Boolean(
+        org ||
+          item.deadline ||
+          item.max_funding ||
+          item.value_or_benefit ||
+          item.eligibility
+      );
+    if ((!rich && !coverage) || !url) return item;
+    const score = Number(item.score ?? 0);
+    const floor = coverage
+      ? 55
+      : isDirectGrantUrl(url)
+        ? 58
+        : isLowQualityGrantUrl(url)
+          ? 42
+          : 52;
+    if (score >= floor) return item;
+    return {
+      ...item,
+      score: floor,
+      reason: item.reason
+        ? `${item.reason} (floor ${floor})`
+        : coverage
+          ? `Coverage seed — score floor ${floor}`
+          : `Concrete opportunity — score floor ${floor}`,
+    };
+  });
 }
 
 export type ProgressCallback = (event: ProgressEvent) => void;
@@ -453,7 +503,7 @@ export class Executor {
         );
       }
     }
-    if (isGrantTarget(spec)) {
+    if (isGrantTarget(spec) || isCurationOpportunityTarget(spec)) {
       const portals = grantPortalDeepLinkSeeds(spec);
       for (const s of portals) {
         seedSources.push({ title: s.title, url: s.url, snippet: s.snippet });
@@ -461,7 +511,7 @@ export class Executor {
       if (portals.length > 0) {
         log(
           LogAction.WEB_SEARCH,
-          `Semillas de portales de grants: ${portals.length}`,
+          `Semillas de portales de grants/oportunidades: ${portals.length}`,
           portals.map((p) => `  → ${p.title} (${truncateUrl(p.url)})`).join("\n"),
           "searching"
         );
@@ -567,6 +617,7 @@ export class Executor {
     let emptyWaves = 0;
     let emptySerpWaves = 0;
     let runSerpExhausted = false;
+    let didSerpCooldownRecovery = false;
     // En modos largos buscamos muchas más consultas por ola y no paramos aunque
     // la cobertura se considere "suficiente": el objetivo es recorrer todas las
     // fuentes del sector hasta agotar el presupuesto de tiempo.
@@ -739,6 +790,36 @@ export class Executor {
         `Consultas: ${waveQueries.length} · sin progreso: ${emptyWaves} olas seguidas${serpExhausted ? " · SERP bloqueado" : ""}`,
         "searching"
       );
+
+      // One real cooldown wait + retry when SERP dies mid-run (instead of burning empty waves).
+      if ((serpExhausted || runSerpExhausted) && !didSerpCooldownRecovery) {
+        didSerpCooldownRecovery = true;
+        const waitMs = Math.max(
+          8_000,
+          Math.min(
+            Math.max(msUntilEnginesReady(webEngines), ENGINE_COOLDOWN_MS) + 1500,
+            95_000
+          )
+        );
+        log(
+          LogAction.INFO,
+          `SERP bloqueado — esperando ${Math.round(waitMs / 1000)}s de cooldown antes de un reintento`,
+          undefined,
+          "searching"
+        );
+        progress(
+          "searching",
+          Math.min(21, 14 + wave),
+          `Esperando cooldown SERP (${Math.round(waitMs / 1000)}s)…`
+        );
+        await sleepMs(waitMs);
+        resetSearchEngineHealth();
+        runSerpExhausted = false;
+        emptySerpWaves = 0;
+        wave += 1;
+        continue;
+      }
+
       if (
         shouldStopForEmptyWaves(
           longMode,
@@ -812,13 +893,14 @@ export class Executor {
     progress("searching", 22, statsMsg);
 
     if (rankedSources.length === 0) {
-      const emergencyPortals = isGrantTarget(spec)
-        ? grantPortalDeepLinkSeeds(spec)
-        : isRealEstateTarget(spec)
-          ? realEstatePortalDeepLinkSeeds(spec)
-          : isJobTarget(spec)
-            ? jobPortalDeepLinkSeeds(spec)
-            : [];
+      const emergencyPortals =
+        isGrantTarget(spec) || isCurationOpportunityTarget(spec)
+          ? grantPortalDeepLinkSeeds(spec)
+          : isRealEstateTarget(spec)
+            ? realEstatePortalDeepLinkSeeds(spec)
+            : isJobTarget(spec)
+              ? jobPortalDeepLinkSeeds(spec)
+              : [];
       if (emergencyPortals.length > 0) {
         rankedSources = emergencyPortals.map((s) => {
           const fetchable = !isBarePortalHomepage(s.url);
@@ -875,6 +957,25 @@ export class Executor {
         progress,
         log
       );
+
+      // Expand listing / portal pages into concrete opportunity deep links, then fetch them.
+      if (
+        isGrantTarget(spec) ||
+        isCurationOpportunityTarget(spec) ||
+        isProgramsTarget(spec) ||
+        isAwardsTarget(spec) ||
+        isExposureTarget(spec)
+      ) {
+        rankedSources = await this.expandListingPages(
+          rankedSources,
+          maxSources,
+          spec,
+          sessions,
+          scraperOptions,
+          progress,
+          log
+        );
+      }
     }
 
     let extracted: ExtractedItem[] = [];
@@ -935,10 +1036,14 @@ export class Executor {
 
     progress("filtering", 72, "Filtrando y ordenando…", { action: LogAction.LLM_SCORE });
     let filtered = await this.filterItems(extracted, spec, cfg, rankedSources);
+    filtered = applyOpportunityScoreFloor(filtered, spec);
 
     if (profile.useCritic && this.criticModel && filtered.length > 0) {
       const deepTarget =
-        isRealEstateTarget(spec) || isGrantTarget(spec) || isJobTarget(spec);
+        isRealEstateTarget(spec) ||
+        isGrantTarget(spec) ||
+        isCurationOpportunityTarget(spec) ||
+        isJobTarget(spec);
       const allHeuristic = filtered.every(
         (i) =>
           !i.reason ||
@@ -959,6 +1064,7 @@ export class Executor {
         });
         const beforeTop = filtered.slice(0, 5).map((i) => `${truncate(String(i.title ?? i.url), 40)} (${i.score ?? "?"})`);
         filtered = await this.criticPass(filtered, spec, cfg);
+        filtered = applyOpportunityScoreFloor(filtered, spec);
         log(
           LogAction.LLM_CRITIC,
           `Revisión Pro con ${this.criticModel}`,
@@ -999,8 +1105,10 @@ export class Executor {
           const url = String(item.url ?? "");
           const snippet = String(item.description ?? item.summary ?? item.reason ?? "");
           // Portal deep-link seeds must survive when SERP is dead (homepages are intentional).
-          if (/portal seed/i.test(snippet)) return Boolean(url);
-          if (!isGrantTarget(spec)) return validateOpportunityResult(item, spec);
+          if (/portal seed|listing deep-link/i.test(snippet)) return Boolean(url);
+          if (!isGrantTarget(spec) && !isCurationOpportunityTarget(spec)) {
+            return validateOpportunityResult(item, spec);
+          }
           if (!validateOpportunityResult(item, spec)) return false;
           return (
             isDirectGrantUrl(url) ||
@@ -1013,7 +1121,7 @@ export class Executor {
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
         .slice(0, Math.max(3, Math.ceil(rankedSources.length * 0.5)));
       // Force portal deep-links from generators (not rankedSources) so coverage never evaporates.
-      if (finalItems.length === 0 && isGrantTarget(spec)) {
+      if (finalItems.length === 0 && (isGrantTarget(spec) || isCurationOpportunityTarget(spec))) {
         finalItems = grantPortalDeepLinkSeeds(spec)
           .map((s) => {
             const item = normalizeExtractedItem({
@@ -1066,13 +1174,22 @@ export class Executor {
 
     // Last resort / coverage merge: ensure portal seeds are present for grant/job/real-estate
     // even when a weak SERP item already filled finalItems, or SERP was exhausted.
-    if (isGrantTarget(spec) || isJobTarget(spec) || isRealEstateTarget(spec)) {
-      const portals = isGrantTarget(spec)
-        ? grantPortalDeepLinkSeeds(spec)
-        : isRealEstateTarget(spec)
-          ? realEstatePortalDeepLinkSeeds(spec)
-          : jobPortalDeepLinkSeeds(spec);
-      if (portals.length > 0 && (finalItems.length === 0 || runSerpExhausted)) {
+    if (
+      isGrantTarget(spec) ||
+      isCurationOpportunityTarget(spec) ||
+      isJobTarget(spec) ||
+      isRealEstateTarget(spec)
+    ) {
+      const portals =
+        isGrantTarget(spec) || isCurationOpportunityTarget(spec)
+          ? grantPortalDeepLinkSeeds(spec)
+          : isRealEstateTarget(spec)
+            ? realEstatePortalDeepLinkSeeds(spec)
+            : jobPortalDeepLinkSeeds(spec);
+      if (
+        portals.length > 0 &&
+        (finalItems.length < 3 || runSerpExhausted || emptySerpWaves >= 2)
+      ) {
         const seen = new Set(
           finalItems.map((i) => String(i.url ?? "").toLowerCase()).filter(Boolean)
         );
@@ -1145,6 +1262,35 @@ export class Executor {
         ),
         "filtering"
       );
+
+      // If curation wiped everything after a thin SERP run, reinject portal coverage seeds.
+      if (
+        finalItems.length === 0 &&
+        (isGrantTarget(spec) || isCurationOpportunityTarget(spec)) &&
+        (runSerpExhausted || emptySerpWaves >= 2 || rankedSources.length > 0)
+      ) {
+        finalItems = grantPortalDeepLinkSeeds(spec)
+          .map((s) =>
+            normalizeExtractedItem({
+              title: s.title,
+              url: s.url,
+              description: s.snippet,
+              summary: s.snippet,
+              score: 55,
+              reason: "Portal coverage seed (post-curation rescue)",
+            })
+          )
+          .filter((item) => Boolean(item.url))
+          .slice(0, 12);
+        if (finalItems.length > 0) {
+          log(
+            LogAction.INFO,
+            `Curation vacía — rescate ${finalItems.length} semillas de portal`,
+            undefined,
+            "filtering"
+          );
+        }
+      }
     }
 
     finalItems.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
@@ -1345,7 +1491,11 @@ export class Executor {
       if (result.rawHtml && result.rawHtml.length > 800) return;
 
       try {
-        const urlOptions = resolveSessionOptions(result.url, spec.search.requiresLogin, sessions, scraperOptions);
+        const urlOptions = {
+          ...resolveSessionOptions(result.url, spec.search.requiresLogin, sessions, scraperOptions),
+          locale: this.searchLocale || scraperOptions?.locale,
+          includeLinkMarkup: true,
+        };
         const content = await fetchPageContent(result.url, urlOptions);
         if (content.length > 200) {
           enriched[idx] = { ...enriched[idx], rawHtml: content };
@@ -1381,6 +1531,78 @@ export class Executor {
     return enriched;
   }
 
+  /**
+   * From fetched listing/portal HTML, harvest concrete opportunity URLs and fetch them.
+   */
+  private async expandListingPages(
+    ranked: RankedSource[],
+    maxSources: number,
+    spec: AgentSpec,
+    sessions: CredentialIndex,
+    scraperOptions: ScraperOptions | undefined,
+    progress: (phase: ProgressEvent["phase"], percent: number, message: string) => void,
+    log: ActionLogger
+  ): Promise<RankedSource[]> {
+    const seen = new Set(ranked.map((r) => normalizeUrl(r.url)));
+    const candidates: RankedSource[] = [];
+    const expandCap = Math.min(48, Math.max(12, Math.floor(maxSources / 4)));
+
+    for (const src of ranked) {
+      if (!src.rawHtml || !isExpandableListingPage(src.url, src.rawHtml)) continue;
+      const links = extractOpportunityDeepLinks(src.rawHtml, src.url, expandCap);
+      for (const link of links) {
+        const key = normalizeUrl(link.url);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidates.push({
+          title: link.title,
+          url: link.url,
+          snippet: link.snippet,
+          relevance: 78,
+          fetchPriority: "high",
+          rankReason: "Listing deep-link expand",
+        });
+        if (candidates.length >= expandCap) break;
+      }
+      if (candidates.length >= expandCap) break;
+    }
+
+    if (candidates.length === 0) return ranked;
+
+    log(
+      LogAction.WEB_SEARCH,
+      `Crawl profundo: ${candidates.length} oportunidades desde listados`,
+      candidates
+        .slice(0, 10)
+        .map((c, i) => `  ${i + 1}. ${truncate(c.title, 60)}\n     ${truncateUrl(c.url)}`)
+        .join("\n"),
+      "searching"
+    );
+    progress("searching", 26, `Leyendo ${candidates.length} deep-links de listados…`);
+
+    const fetched = await this.enrichRanked(
+      candidates,
+      candidates,
+      spec,
+      sessions,
+      scraperOptions,
+      progress,
+      log
+    );
+
+    const merged = [...fetched, ...ranked];
+    const out: RankedSource[] = [];
+    const seenMerged = new Set<string>();
+    for (const c of merged) {
+      if (out.length >= maxSources) break;
+      const key = normalizeUrl(c.url);
+      if (seenMerged.has(key)) continue;
+      seenMerged.add(key);
+      out.push(c);
+    }
+    return out;
+  }
+
   private async criticPass(
     items: ExtractedItem[],
     spec: AgentSpec,
@@ -1391,11 +1613,15 @@ export class Executor {
       const reHint = isRealEstateTarget(spec)
         ? " Strict geography: demote anything outside the goal comarcas; demote food/dictionary pages; promote Idealista/Fotocasa listings in those zones with renovation potential."
         : "";
+      const oppHint =
+        isGrantTarget(spec) || isCurationOpportunityTarget(spec)
+          ? " For opportunities: score 0–25 only for bare hubs with no named program. Named open calls with org/deadline/funding/deep URL must stay ≥55."
+          : "";
       const response = await this.ollama.chat(
         [
           {
             role: "system",
-            content: `You are a senior research critic. Re-score each item 0-100 for relevance to the goal. Be strict.${reHint} Return JSON array with url, score, reason.`,
+            content: `You are a senior research critic. Re-score each item 0-100 for relevance to the goal. Be strict.${reHint}${oppHint} Return JSON array with url, score, reason.`,
           },
           {
             role: "user",
@@ -1505,21 +1731,22 @@ export class Executor {
   ): Promise<ExtractedItem> {
     const schema = spec.output.schema;
     const truncated = sliceContentForExtract(content, cfg.extractContentChars, result.url, spec);
-    const grant = isGrantTarget(spec);
+    const grant = isGrantTarget(spec) || isCurationOpportunityTarget(spec);
     const realEstate = isRealEstateTarget(spec);
     const systemPrompt = grant
-      ? `Extract grant/funding opportunity fields from this page. Return JSON: ${schema.join(", ")}.
+      ? `Extract an OPEN opportunity (grant/funding, fellowship/program, award/competition, or exposure call) from this page. Return JSON: ${schema.join(", ")}.
 Rules:
-- Only extract a CONCRETE open grant/call (named program with eligibility or deadline). Reject portal landing pages, navigation hubs, and generic "Grants" finders — set score below 40 for those.
+- Prefer a CONCRETE named program with eligibility, deadline, or funding/benefit. Reject pure navigation hubs without a named call — set score below 40 for those.
+- If the page lists MANY opportunities, extract the single best open call matching the goal (not the portal title).
 - scope: geographic scope like NATIONAL, GLOBAL, AU & NZ, EU, ES — infer from content
-- organization: funding body or company offering the grant
-- program_name: official program or grant name (not the website title)
-- description: 1-3 sentence summary of who it supports and what it funds
-- max_funding: maximum amount as written (e.g. Up to $15,000)
-- currency: ISO or symbol if clear (USD, AUD, EUR)
-- deadline: closing date as written (e.g. Closing 30 July)
-- url: direct link to apply or official call page (deep link, not homepage)
-- If not a specific grant/funding opportunity, set score below 40
+- organization: funding body or host organisation
+- program_name: official program / grant / award name (not the website title)
+- description: 1-3 sentence summary of who it supports and what it offers
+- max_funding or value_or_benefit: amount or benefit as written
+- deadline: closing date as written (e.g. Closing 30 July) or "rolling" if ongoing
+- url: direct link to apply or official call page (deep link, not bare homepage)
+- category: Funding | Programs & Fellowships | Awards & Competitions | Exposure when clear
+- If not a specific open opportunity, set score below 40
 Source URL: ${result.url}`
       : realEstate
         ? `Extract a Spanish real-estate listing (casa/chalet/masía/piso) from this page. Return JSON: ${schema.join(", ")}.
@@ -1575,9 +1802,26 @@ Source URL: ${result.url}`;
       const title = parsed.title;
       parsed.title =
         (typeof title === "string" ? title.trim() : title != null ? String(title) : "") || result.title;
+
+      // Preserve coverage provenance so validate/curation/floor still recognize seeds & expands.
+      const ranked = result as SearchResult & { rankReason?: string };
+      const provenance = `${result.snippet ?? ""} ${ranked.rankReason ?? ""}`;
+      if (hasCoverageProvenance(provenance) || hasCoverageProvenance(parsed.reason)) {
+        const tag = ranked.rankReason || result.snippet || "coverage seed";
+        parsed.reason = parsed.reason ? `${parsed.reason} | ${tag}` : tag;
+        if (!parsed.description && result.snippet) parsed.description = result.snippet;
+        if (!parsed.summary && result.snippet) parsed.summary = result.snippet;
+      }
       return parsed;
     } catch {
-      return { title: result.title, url: result.url, description: result.snippet };
+      const ranked = result as SearchResult & { rankReason?: string };
+      return {
+        title: result.title,
+        url: result.url,
+        description: result.snippet,
+        summary: result.snippet,
+        reason: ranked.rankReason || result.snippet || "Extraction fallback",
+      };
     }
   }
 
@@ -1623,11 +1867,15 @@ Source URL: ${result.url}`;
       const reHint = isRealEstateTarget(spec)
         ? ` REAL ESTATE SCORING: reward listings in the exact comarcas/zones from the goal; reward renovation/reform potential and clear price; score <25 if outside those zones (Madrid/Fuenlabrada/etc.), recipes, dictionaries, or bare portal homepages; score 70+ only for on-zone property listings or deep Idealista/Fotocasa search pages for those zones.`
         : "";
+      const grantHint =
+        isGrantTarget(spec) || isCurationOpportunityTarget(spec)
+          ? ` OPPORTUNITY SCORING: score 0–25 ONLY for bare navigational hubs with no named program. If the item has a program/org name plus deadline, funding, eligibility, or a deep official URL, score ≥55. Do not zero valid open calls just because the page also lists other grants.`
+          : "";
       const response = await this.ollama.chat(
         [
           {
             role: "system",
-            content: `Score each item 0-100. Criteria: ${spec.filters.criteria}.${reHint} Return JSON array with score and reason.`,
+            content: `Score each item 0-100. Criteria: ${spec.filters.criteria}.${reHint}${grantHint} Return JSON array with score and reason.`,
           },
           {
             role: "user",
