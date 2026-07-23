@@ -1,6 +1,6 @@
 {
   "name": "aiia",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "private": true,
   "description": "AIIA - Local AI chat and search agents",
   "workspaces": [
@@ -11,9 +11,10 @@
     "dev": "npm run dev -w @aiia/desktop",
     "build": "npm run build -w @aiia/desktop",
     "build:packages": "npm run build -w @aiia/ollama-client && npm run build -w @aiia/scraper && npm run build -w @aiia/agent-engine && npm run build -w @aiia/agent-runner && npm run build -w @aiia/credential-runner",
+    "check:versions": "node scripts/check-versions.mjs",
     "tauri": "npm run tauri -w @aiia/desktop",
     "tauri:dev": "powershell -ExecutionPolicy Bypass -File scripts/predev.ps1",
-    "tauri:build": "node scripts/bundle-runners.mjs && node scripts/bundle-update-helper.mjs && npm run tauri build -w @aiia/desktop",
+    "tauri:build": "node scripts/check-versions.mjs && node scripts/bundle-runners.mjs && node scripts/bundle-update-helper.mjs && npm run tauri build -w @aiia/desktop",
     "smoke:chat": "node scripts/smoke-chat.mjs",
     "smoke:gemini-client": "node scripts/smoke-gemini-client.mjs",
     "lint": "npm run build:packages",

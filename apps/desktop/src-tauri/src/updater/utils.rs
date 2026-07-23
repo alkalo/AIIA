@@ -47,6 +47,10 @@ pub fn is_packaged() -> bool {
     true
 }
 
-pub fn current_app_version() -> String {
+/// Prefer Tauri package version (from tauri.conf.json). Cargo.toml must stay in sync too.
+pub fn current_app_version(app: Option<&tauri::AppHandle>) -> String {
+    if let Some(app) = app {
+        return app.package_info().version.to_string();
+    }
     env!("CARGO_PKG_VERSION").to_string()
 }

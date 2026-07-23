@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "aiia-desktop"
-version = "0.1.5"
+version = "0.1.24"
 dependencies = [
  "aiia-core",
  "base64 0.22.1",

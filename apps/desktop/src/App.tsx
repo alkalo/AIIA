@@ -10,6 +10,7 @@ import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
 import { Onboarding } from "./pages/Onboarding";
 import { api } from "./api";
+import { UpdateOverlay } from "./components/UpdateOverlay";
 import "./App.css";
 import "./i18n";
 
@@ -30,25 +31,33 @@ function App() {
   };
 
   if (!onboarded) {
-    return <Onboarding onComplete={completeOnboarding} />;
+    return (
+      <>
+        <UpdateOverlay />
+        <Onboarding onComplete={completeOnboarding} />
+      </>
+    );
   }
 
   return (
-    <HashRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<Chat />} />
-          <Route path="/chat/:id" element={<Chat />} />
-          <Route path="/agents" element={<Dashboard />} />
-          <Route path="/create" element={<CreateAgent />} />
-          <Route path="/review/:id" element={<ReviewAgent />} />
-          <Route path="/inbox" element={<Inbox />} />
-          <Route path="/runs" element={<Runs />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </HashRouter>
+    <>
+      <UpdateOverlay />
+      <HashRouter>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<Chat />} />
+            <Route path="/chat/:id" element={<Chat />} />
+            <Route path="/agents" element={<Dashboard />} />
+            <Route path="/create" element={<CreateAgent />} />
+            <Route path="/review/:id" element={<ReviewAgent />} />
+            <Route path="/inbox" element={<Inbox />} />
+            <Route path="/runs" element={<Runs />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </HashRouter>
+    </>
   );
 }
 

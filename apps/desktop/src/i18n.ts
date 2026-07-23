@@ -399,6 +399,14 @@ const resources = {
         updateDevMode: "Updates work in the packaged app only.",
         openReleases: "Open GitHub Releases",
       },
+      updateOverlay: {
+        checking: "Checking for updates…",
+        downloading: "Downloading new version",
+        verifying: "Verifying download…",
+        installing: "Installing and restarting…",
+        version: "Version v{{version}}",
+        hint: "Please wait — the app is locked so you don’t lose work during the update.",
+      },
       onboarding: {
         title: "Welcome to AIIA",
         subtitle: "Set up local AI for AIIA Chat and search agents",
@@ -883,6 +891,14 @@ const resources = {
         autoUpdate: "Instalar actualizaciones automáticamente al iniciar",
         updateDevMode: "Las actualizaciones solo funcionan en la app empaquetada.",
         openReleases: "Abrir GitHub Releases",
+      },
+      updateOverlay: {
+        checking: "Buscando actualizaciones…",
+        downloading: "Downloading new version",
+        verifying: "Verificando descarga…",
+        installing: "Instalando y reiniciando…",
+        version: "Versión v{{version}}",
+        hint: "Espera — la app está bloqueada para que no pierdas el trabajo durante la actualización.",
       },
       onboarding: {
         title: "Bienvenido a AIIA",

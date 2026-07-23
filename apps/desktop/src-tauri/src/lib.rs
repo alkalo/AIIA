@@ -1223,8 +1223,8 @@ struct UpdatePrefsDto {
 }
 
 #[tauri::command]
-fn get_app_info() -> updater::AppInfo {
-    updater::get_app_info()
+fn get_app_info(app: AppHandle) -> updater::AppInfo {
+    updater::get_app_info(&app)
 }
 
 #[tauri::command]

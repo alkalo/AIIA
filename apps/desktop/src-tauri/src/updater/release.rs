@@ -62,10 +62,19 @@ pub async fn fetch_release_manifest(tag: &str) -> Option<Value> {
 }
 
 pub fn find_windows_msi_asset(release: &GhRelease) -> Option<&GhAsset> {
-    release
+    let msis: Vec<_> = release
         .assets
         .iter()
-        .find(|a| a.name.to_ascii_lowercase().ends_with(".msi") && a.name.contains("AIIA"))
+        .filter(|a| a.name.to_ascii_lowercase().ends_with(".msi") && a.name.contains("AIIA"))
+        .collect();
+    if msis.is_empty() {
+        return None;
+    }
+    // Prefer en-US when several MSI locales are published (checksum map is usually en-US).
+    msis.iter()
+        .find(|a| a.name.contains("en-US"))
+        .copied()
+        .or_else(|| msis.first().copied())
 }
 
 pub fn find_macos_dmg_asset(release: &GhRelease) -> Option<&GhAsset> {
@@ -82,6 +91,17 @@ pub fn resolve_expected_sha256(
     kind: &str,
 ) -> Option<String> {
     if let Some(m) = manifest {
+        // Prefer entry that matches this exact file name when present.
+        if let Some(assets) = m.get("assets").and_then(|a| a.as_object()) {
+            for (_k, entry) in assets {
+                let file = entry.get("file").and_then(|v| v.as_str()).unwrap_or("");
+                if file.eq_ignore_ascii_case(asset_name) {
+                    if let Some(hash) = entry.get("sha256").and_then(|v| v.as_str()) {
+                        return Some(hash.to_lowercase());
+                    }
+                }
+            }
+        }
         if let Some(entry) = m
             .get("assets")
             .and_then(|a| a.get(kind))
@@ -116,9 +136,17 @@ pub fn release_notes_text(body: Option<&str>) -> String {
 }
 
 pub fn compute_file_sha256(path: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    let mut buf = [0u8; 1024 * 256];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(hex::encode(hasher.finalize()))
 }
 
@@ -147,17 +175,25 @@ pub async fn download_file(
         .map_err(|e| e.to_string())?;
     let mut received: u64 = 0;
     let mut last_pct: u32 = 255;
+    let mut last_bytes_emit: u64 = 0;
 
+    on_progress(0);
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| e.to_string())?;
         received += chunk.len() as u64;
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
         if total > 0 {
-            let pct = ((received * 100) / total) as u32;
-            if pct != last_pct && (pct == 0 || pct == 100 || pct >= last_pct.saturating_add(10)) {
+            let pct = ((received * 100) / total).min(100) as u32;
+            // Emit every 1% so large MSI downloads don't look stuck at 0%.
+            if pct != last_pct {
                 last_pct = pct;
                 on_progress(pct);
             }
+        } else if received.saturating_sub(last_bytes_emit) >= 2 * 1024 * 1024 {
+            // Unknown size: pulse progress based on MB downloaded (cap at 95 until done).
+            last_bytes_emit = received;
+            let fake = ((received / (2 * 1024 * 1024)) as u32 % 90) + 5;
+            on_progress(fake);
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;

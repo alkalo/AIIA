@@ -74,10 +74,10 @@ fn emit_status(app: &AppHandle, status: UpdateStatus) {
     let _ = app.emit("update-status", status);
 }
 
-pub fn get_app_info() -> AppInfo {
+pub fn get_app_info(app: &AppHandle) -> AppInfo {
     let packaged = utils::is_packaged();
     AppInfo {
-        version: utils::current_app_version(),
+        version: utils::current_app_version(Some(app)),
         is_packaged: packaged,
         update_supported: packaged,
         platform: std::env::consts::OS.to_string(),
@@ -98,7 +98,7 @@ pub async fn check_for_updates(
     auto_install: bool,
     _manual: bool,
 ) -> UpdateCheckResult {
-    let current = utils::current_app_version();
+    let current = utils::current_app_version(Some(&app));
 
     if CHECKING.swap(true, Ordering::SeqCst) {
         return UpdateCheckResult {
@@ -403,6 +403,18 @@ async fn install_windows(
     })
     .await?;
 
+    emit_status(
+        app,
+        UpdateStatus {
+            phase: "verifying".to_string(),
+            version: Some(version.to_string()),
+            percent: Some(100),
+            message: "Verifying download…".to_string(),
+            release_notes: None,
+            current_version: None,
+            up_to_date: None,
+        },
+    );
     release::verify_downloaded_file(&dest, expected_sha256, &asset.name)?;
 
     emit_status(
@@ -422,7 +434,8 @@ async fn install_windows(
     let parent_pid = std::process::id();
     deferred::launch_msi_install_after_quit(&dest, &install_dir, parent_pid)?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(3500)).await;
+    // Give the UI a moment to show the installing overlay before exit.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
     app.exit(0);
     Ok(())
 }
@@ -471,6 +484,18 @@ async fn install_macos(
     })
     .await?;
 
+    emit_status(
+        app,
+        UpdateStatus {
+            phase: "verifying".to_string(),
+            version: Some(version.to_string()),
+            percent: Some(100),
+            message: "Verifying download…".to_string(),
+            release_notes: None,
+            current_version: None,
+            up_to_date: None,
+        },
+    );
     release::verify_downloaded_file(&dest, expected_sha256, &asset.name)?;
 
     emit_status(
@@ -490,7 +515,7 @@ async fn install_macos(
     let parent_pid = std::process::id();
     deferred::launch_dmg_install_after_quit(&dest, &app_path, parent_pid)?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(3500)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
     app.exit(0);
     Ok(())
 }

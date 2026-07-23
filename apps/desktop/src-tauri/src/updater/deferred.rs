@@ -43,22 +43,42 @@ fn resolve_update_helper_exe() -> Option<PathBuf> {
     None
 }
 
+/// Copy helper out of Program Files so msiexec can replace files there.
+#[cfg(windows)]
+fn stage_helper_outside_install() -> Result<PathBuf, String> {
+    let source = resolve_update_helper_exe().ok_or_else(|| {
+        "Update helper not found in app bundle. Reinstall AIIA from the latest release.".to_string()
+    })?;
+    let stage_dir = std::env::temp_dir().join("AIIA-update");
+    std::fs::create_dir_all(&stage_dir).map_err(|e| e.to_string())?;
+    let dest = stage_dir.join("aiia-update-helper.exe");
+    std::fs::copy(&source, &dest).map_err(|e| {
+        format!(
+            "Could not stage update helper from {} to {}: {e}",
+            source.display(),
+            dest.display()
+        )
+    })?;
+    Ok(dest)
+}
+
 #[cfg(windows)]
 pub fn launch_msi_install_after_quit(
     installer_path: &Path,
     install_dir: &Path,
     parent_pid: u32,
 ) -> Result<(), String> {
-    let helper = resolve_update_helper_exe().ok_or_else(|| {
-        "Update helper not found in app bundle. Reinstall AIIA from the latest release.".to_string()
-    })?;
+    let helper = stage_helper_outside_install()?;
 
     let msi = installer_path.to_string_lossy().to_string();
     let exe = install_dir.join("AIIA.exe");
     let exe_str = exe.to_string_lossy().to_string();
+    let install_dir_str = install_dir.to_string_lossy().to_string();
+    let log_path = update_install_log_path();
+    let log_str = log_path.to_string_lossy().to_string();
 
     append_log(&format!(
-        "{} [rust] launching update helper={} msi={msi}",
+        "{} [rust] launching staged helper={} msi={msi} install_dir={install_dir_str}",
         chrono::Utc::now().to_rfc3339(),
         helper.display()
     ));
@@ -75,6 +95,10 @@ pub fn launch_msi_install_after_quit(
             &msi,
             "--exe",
             &exe_str,
+            "--install-dir",
+            &install_dir_str,
+            "--log",
+            &log_str,
             "--wait-secs",
             "180",
         ])

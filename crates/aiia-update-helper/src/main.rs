@@ -1,23 +1,28 @@
-//! Waits for the parent AIIA process, installs an MSI, then relaunches the app.
+//! Waits for the parent AIIA process, installs an MSI (elevated), then relaunches the app.
 //! Bundled with AIIA to avoid PowerShell-based update scripts (AV-friendly).
+//! Must be copied out of Program Files before running so msiexec can overwrite the install dir.
 
 use std::env;
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 fn usage() -> ! {
     eprintln!(
-        "Usage: aiia-update-helper --parent-pid PID --msi PATH --exe PATH [--wait-secs SECS]"
+        "Usage: aiia-update-helper --parent-pid PID --msi PATH --exe PATH [--install-dir PATH] [--log PATH] [--wait-secs SECS]"
     );
     std::process::exit(2);
 }
 
-fn parse_args() -> (u32, String, String, u64) {
+fn parse_args() -> (u32, String, String, Option<String>, Option<PathBuf>, u64) {
     let mut parent_pid: Option<u32> = None;
     let mut msi = None;
     let mut exe = None;
+    let mut install_dir = None;
+    let mut log_path = None;
     let mut wait_secs: u64 = 180;
     let args: Vec<String> = env::args().collect();
     let mut i = 1;
@@ -35,6 +40,14 @@ fn parse_args() -> (u32, String, String, u64) {
                 i += 1;
                 exe = args.get(i).cloned();
             }
+            "--install-dir" => {
+                i += 1;
+                install_dir = args.get(i).cloned();
+            }
+            "--log" => {
+                i += 1;
+                log_path = args.get(i).map(PathBuf::from);
+            }
             "--wait-secs" => {
                 i += 1;
                 wait_secs = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(180);
@@ -46,7 +59,27 @@ fn parse_args() -> (u32, String, String, u64) {
     let parent = parent_pid.filter(|p| *p > 0).unwrap_or_else(|| usage());
     let msi = msi.unwrap_or_else(|| usage());
     let exe = exe.unwrap_or_else(|| usage());
-    (parent, msi, exe, wait_secs)
+    (parent, msi, exe, install_dir, log_path, wait_secs)
+}
+
+fn now_stamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("unix:{secs}")
+}
+
+fn append_log(log_path: &Option<PathBuf>, line: &str) {
+    let Some(path) = log_path else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 #[cfg(windows)]
@@ -69,72 +102,167 @@ fn is_process_running(_pid: u32) -> bool {
     false
 }
 
-fn wait_for_parent(pid: u32, max_secs: u64) {
+fn wait_for_parent(pid: u32, max_secs: u64, log_path: &Option<PathBuf>) {
+    append_log(
+        log_path,
+        &format!(
+            "{} [helper] waiting for parent pid={pid} (max {max_secs}s)",
+            now_stamp()
+        ),
+    );
     let deadline = Duration::from_secs(max_secs);
     let start = std::time::Instant::now();
     while start.elapsed() < deadline && is_process_running(pid) {
         thread::sleep(Duration::from_millis(400));
     }
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_secs(3));
+    append_log(
+        log_path,
+        &format!("{} [helper] parent exited (or wait timed out)", now_stamp()),
+    );
 }
 
 #[cfg(windows)]
-fn run_msi(msi: &Path) -> i32 {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+fn run_msi(msi: &Path, install_dir: Option<&str>, log_path: &Option<PathBuf>) -> i32 {
     let windir = env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
     let msiexec = Path::new(&windir).join("System32").join("msiexec.exe");
-    Command::new(msiexec)
-        .args([
-            "/i",
-            &msi.to_string_lossy(),
-            "/passive",
-            "/norestart",
-            "REBOOT=ReallySuppress",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
+    let msi_str = msi.to_string_lossy().to_string();
+
+    let mut args = vec![
+        "/i".to_string(),
+        msi_str,
+        "/qb".to_string(),
+        "/norestart".to_string(),
+        "REBOOT=ReallySuppress".to_string(),
+    ];
+    if let Some(dir) = install_dir {
+        args.push(format!("INSTALLDIR={dir}"));
+        args.push(format!("APPLICATIONFOLDER={dir}"));
+        args.push(format!("TARGETDIR={dir}"));
+    }
+
+    append_log(
+        log_path,
+        &format!(
+            "{} [helper] msiexec {} {}",
+            now_stamp(),
+            msiexec.display(),
+            args.join(" ")
+        ),
+    );
+
+    // Visible msiexec so UAC can appear when writing to Program Files.
+    let code = Command::new(&msiexec)
+        .args(&args)
         .status()
         .map(|s| s.code().unwrap_or(-1))
-        .unwrap_or(-1)
+        .unwrap_or(-1);
+    append_log(
+        log_path,
+        &format!("{} [helper] msiexec exit={code}", now_stamp()),
+    );
+    code
 }
 
 #[cfg(not(windows))]
-fn run_msi(_msi: &Path) -> i32 {
+fn run_msi(_msi: &Path, _install_dir: Option<&str>, _log_path: &Option<PathBuf>) -> i32 {
     -1
 }
 
-fn relaunch(exe: &Path) -> bool {
+fn msi_ok(code: i32) -> bool {
+    code == 0 || code == 3010
+}
+
+fn relaunch(exe: &Path, log_path: &Option<PathBuf>) -> bool {
     if !exe.exists() {
+        append_log(
+            log_path,
+            &format!(
+                "{} [helper] exe missing after install: {}",
+                now_stamp(),
+                exe.display()
+            ),
+        );
         return false;
     }
     let dir = exe.parent().unwrap_or_else(|| Path::new("."));
-    for attempt in 0..8 {
+    for attempt in 0..10 {
         if attempt > 0 {
             thread::sleep(Duration::from_secs(2));
         }
-        if Command::new(exe)
-            .current_dir(dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .is_ok()
+        append_log(
+            log_path,
+            &format!(
+                "{} [helper] relaunch attempt {} -> {}",
+                now_stamp(),
+                attempt + 1,
+                exe.display()
+            ),
+        );
+        #[cfg(windows)]
         {
-            thread::sleep(Duration::from_secs(3));
-            return true;
+            let ok = Command::new("cmd")
+                .args(["/C", "start", "", &exe.to_string_lossy()])
+                .current_dir(dir)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .is_ok();
+            if ok {
+                thread::sleep(Duration::from_secs(2));
+                append_log(log_path, &format!("{} [helper] relaunch ok", now_stamp()));
+                return true;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if Command::new(exe)
+                .current_dir(dir)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .is_ok()
+            {
+                return true;
+            }
         }
     }
+    append_log(log_path, &format!("{} [helper] relaunch failed", now_stamp()));
     false
 }
 
 fn main() {
-    let (parent_pid, msi, exe, wait_secs) = parse_args();
-    wait_for_parent(parent_pid, wait_secs);
-    let code = run_msi(Path::new(&msi));
-    eprintln!("aiia-update-helper: msiexec exit {code}");
-    thread::sleep(Duration::from_secs(3));
-    if !relaunch(Path::new(&exe)) {
-        eprintln!("aiia-update-helper: failed to relaunch {}", exe);
+    let (parent_pid, msi, exe, install_dir, log_path, wait_secs) = parse_args();
+    append_log(
+        &log_path,
+        &format!(
+            "{} [helper] start parent={parent_pid} msi={msi} exe={exe}",
+            now_stamp()
+        ),
+    );
+    wait_for_parent(parent_pid, wait_secs, &log_path);
+    let code = run_msi(Path::new(&msi), install_dir.as_deref(), &log_path);
+    if !msi_ok(code) {
+        append_log(
+            &log_path,
+            &format!(
+                "{} [helper] install FAILED exit={code} — not relaunching",
+                now_stamp()
+            ),
+        );
+        #[cfg(windows)]
+        {
+            let msg = format!(
+                "javascript:var s=new ActiveXObject('WScript.Shell');s.Popup('AIIA update failed (msiexec exit {code}). Reinstall from GitHub Releases.',12,'AIIA Update',16);close();"
+            );
+            let _ = Command::new("mshta").arg(msg).spawn();
+        }
+        std::process::exit(1);
+    }
+    thread::sleep(Duration::from_secs(2));
+    if !relaunch(Path::new(&exe), &log_path) {
         std::process::exit(1);
     }
 }
