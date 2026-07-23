@@ -1,6 +1,6 @@
 {
   "name": "aiia",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "private": true,
   "description": "AIIA - Local AI chat and search agents",
   "workspaces": [

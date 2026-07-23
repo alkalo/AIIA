@@ -73,12 +73,11 @@ pub fn launch_msi_install_after_quit(
     let msi = installer_path.to_string_lossy().to_string();
     let exe = install_dir.join("AIIA.exe");
     let exe_str = exe.to_string_lossy().to_string();
-    let install_dir_str = install_dir.to_string_lossy().to_string();
     let log_path = update_install_log_path();
     let log_str = log_path.to_string_lossy().to_string();
 
     append_log(&format!(
-        "{} [rust] launching staged helper={} msi={msi} install_dir={install_dir_str}",
+        "{} [rust] launching staged helper={} msi={msi} (no INSTALLDIR override)",
         chrono::Utc::now().to_rfc3339(),
         helper.display()
     ));
@@ -87,6 +86,8 @@ pub fn launch_msi_install_after_quit(
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
+    // Prefer not forcing INSTALLDIR: WiX major upgrade keeps the existing location.
+    // Passing INSTALLDIR=C:\Program Files\... as separate argv made msiexec show /help.
     Command::new(&helper)
         .args([
             "--parent-pid",
@@ -95,8 +96,6 @@ pub fn launch_msi_install_after_quit(
             &msi,
             "--exe",
             &exe_str,
-            "--install-dir",
-            &install_dir_str,
             "--log",
             &log_str,
             "--wait-secs",

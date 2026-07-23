@@ -1,6 +1,10 @@
 //! Waits for the parent AIIA process, installs an MSI (elevated), then relaunches the app.
 //! Bundled with AIIA to avoid PowerShell-based update scripts (AV-friendly).
-//! Must be copied out of Program Files before running so msiexec can overwrite the install dir.
+//! Must be copied out of Program Files before running so msiexec can replace files there.
+//!
+//! Important: never pass INSTALLDIR=C:\Program Files\... as a bare argv token — msiexec
+//! re-parses its command line and treats the space as a separator, which drops `/i` and
+//! shows the Windows Installer help screen instead of installing.
 
 use std::env;
 use std::fs::OpenOptions;
@@ -57,8 +61,8 @@ fn parse_args() -> (u32, String, String, Option<String>, Option<PathBuf>, u64) {
         i += 1;
     }
     let parent = parent_pid.filter(|p| *p > 0).unwrap_or_else(|| usage());
-    let msi = msi.unwrap_or_else(|| usage());
-    let exe = exe.unwrap_or_else(|| usage());
+    let msi = msi.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| usage());
+    let exe = exe.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| usage());
     (parent, msi, exe, install_dir, log_path, wait_secs)
 }
 
@@ -122,23 +126,66 @@ fn wait_for_parent(pid: u32, max_secs: u64, log_path: &Option<PathBuf>) {
     );
 }
 
+/// Escape a path for embedding inside double quotes on a Windows command line.
+fn quote_win(path: &str) -> String {
+    format!("\"{}\"", path.replace('"', ""))
+}
+
 #[cfg(windows)]
 fn run_msi(msi: &Path, install_dir: Option<&str>, log_path: &Option<PathBuf>) -> i32 {
     let windir = env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
     let msiexec = Path::new(&windir).join("System32").join("msiexec.exe");
-    let msi_str = msi.to_string_lossy().to_string();
 
-    let mut args = vec![
-        "/i".to_string(),
-        msi_str,
-        "/qb".to_string(),
-        "/norestart".to_string(),
-        "REBOOT=ReallySuppress".to_string(),
-    ];
+    if !msi.is_file() {
+        append_log(
+            log_path,
+            &format!(
+                "{} [helper] MSI missing or not a file: {}",
+                now_stamp(),
+                msi.display()
+            ),
+        );
+        return -2;
+    }
+    let size = msi.metadata().map(|m| m.len()).unwrap_or(0);
+    if size < 1_000_000 {
+        append_log(
+            log_path,
+            &format!(
+                "{} [helper] MSI suspiciously small ({size} bytes): {}",
+                now_stamp(),
+                msi.display()
+            ),
+        );
+        return -3;
+    }
+
+    let msi_str = msi.to_string_lossy().replace('"', "");
+    let msi_log = log_path
+        .as_ref()
+        .and_then(|p| p.parent().map(|d| d.join("msiexec-update.log")))
+        .unwrap_or_else(|| {
+            env::temp_dir()
+                .join("AIIA-update")
+                .join("msiexec-update.log")
+        });
+    if let Some(parent) = msi_log.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let msi_log_str = msi_log.to_string_lossy().replace('"', "");
+
+    // Single command-line string so spaces in paths stay inside quotes.
+    // Do NOT pass INSTALLDIR=C:\Program Files\... as separate argv — msiexec shows /help.
+    // Major-upgrade MSI already targets the existing product install location.
+    let mut params = format!(
+        "/i {} /qb /norestart REBOOT=ReallySuppress /L*v {}",
+        quote_win(&msi_str),
+        quote_win(&msi_log_str)
+    );
     if let Some(dir) = install_dir {
-        args.push(format!("INSTALLDIR={dir}"));
-        args.push(format!("APPLICATIONFOLDER={dir}"));
-        args.push(format!("TARGETDIR={dir}"));
+        let dir = dir.replace('"', "");
+        // Property value quotes required by MSI when path has spaces.
+        params.push_str(&format!(" INSTALLDIR={}", quote_win(&dir)));
     }
 
     append_log(
@@ -147,13 +194,14 @@ fn run_msi(msi: &Path, install_dir: Option<&str>, log_path: &Option<PathBuf>) ->
             "{} [helper] msiexec {} {}",
             now_stamp(),
             msiexec.display(),
-            args.join(" ")
+            params
         ),
     );
 
-    // Visible msiexec so UAC can appear when writing to Program Files.
+    use std::os::windows::process::CommandExt;
+    // raw_arg: pass the parameter string as msiexec expects (quoted paths intact).
     let code = Command::new(&msiexec)
-        .args(&args)
+        .raw_arg(&params)
         .status()
         .map(|s| s.code().unwrap_or(-1))
         .unwrap_or(-1);
@@ -233,6 +281,25 @@ fn relaunch(exe: &Path, log_path: &Option<PathBuf>) -> bool {
     false
 }
 
+fn popup_fail(code: i32) {
+    #[cfg(windows)]
+    {
+        let detail = match code {
+            -2 => "MSI file missing after download.".to_string(),
+            -3 => "MSI download looks incomplete.".to_string(),
+            _ => format!("msiexec exit {code}"),
+        };
+        let msg = format!(
+            "javascript:var s=new ActiveXObject('WScript.Shell');s.Popup('AIIA update failed ({detail}). Install manually from GitHub Releases v0.1.26+.',16,'AIIA Update',16);close();",
+        );
+        let _ = Command::new("mshta").arg(msg).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = code;
+    }
+}
+
 fn main() {
     let (parent_pid, msi, exe, install_dir, log_path, wait_secs) = parse_args();
     append_log(
@@ -252,13 +319,7 @@ fn main() {
                 now_stamp()
             ),
         );
-        #[cfg(windows)]
-        {
-            let msg = format!(
-                "javascript:var s=new ActiveXObject('WScript.Shell');s.Popup('AIIA update failed (msiexec exit {code}). Reinstall from GitHub Releases.',12,'AIIA Update',16);close();"
-            );
-            let _ = Command::new("mshta").arg(msg).spawn();
-        }
+        popup_fail(code);
         std::process::exit(1);
     }
     thread::sleep(Duration::from_secs(2));
